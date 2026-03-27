@@ -28,7 +28,7 @@ import (
 var staticFiles embed.FS
 
 const (
-	dbHost     = "localhost"
+	dbHost     = "postgres-db"
 	dbPort     = 5432
 	dbUser     = "root"
 	dbPassword = "root"

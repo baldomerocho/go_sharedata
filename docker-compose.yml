@@ -1,0 +1,13 @@
+services:
+  sharedata:
+    build: .
+    container_name: sharedata
+    ports:
+      - "8844:8844"
+    networks:
+      - databases_default
+    restart: unless-stopped
+
+networks:
+  databases_default:
+    external: true
