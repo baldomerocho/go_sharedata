@@ -1,0 +1,1186 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ShareData</title>
+<style>
+:root {
+  --bg: #0a0a0f;
+  --surface: #12121a;
+  --surface2: #1a1a26;
+  --surface3: #222233;
+  --border: #2a2a3d;
+  --text: #e4e4ed;
+  --text2: #8888a0;
+  --accent: #6c5ce7;
+  --accent2: #a29bfe;
+  --accent-dim: rgba(108,92,231,0.12);
+  --danger: #e74c3c;
+  --success: #00cec9;
+  --radius: 12px;
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+
+@font-face {
+  font-family: 'Inter';
+  src: local('Inter');
+}
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Header */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logo {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  color: var(--accent2);
+}
+
+.logo span {
+  color: var(--text2);
+  font-weight: 400;
+  font-size: 13px;
+  margin-left: 8px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  animation: pulse 2s infinite;
+}
+
+.status-dot.disconnected {
+  background: var(--danger);
+  animation: none;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.user-input {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  width: 160px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.user-input:focus {
+  border-color: var(--accent);
+}
+
+.btn {
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font);
+}
+
+.btn:hover {
+  background: var(--surface3);
+  border-color: var(--accent);
+}
+
+.btn-danger {
+  color: var(--danger);
+}
+
+.btn-danger:hover {
+  background: rgba(231,76,60,0.1);
+  border-color: var(--danger);
+}
+
+/* Messages area */
+.messages-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  scroll-behavior: smooth;
+}
+
+.messages-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.messages-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.messages-container::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.message {
+  display: flex;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  transition: background 0.15s;
+  position: relative;
+  group: message;
+}
+
+.message:hover {
+  background: var(--surface);
+}
+
+.message:hover .msg-actions {
+  opacity: 1;
+}
+
+.msg-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--accent-dim);
+  color: var(--accent2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 14px;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
+.msg-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.msg-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+
+.msg-user {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--accent2);
+}
+
+.msg-time {
+  font-size: 11px;
+  color: var(--text2);
+}
+
+.msg-content {
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+
+.msg-content.large-text {
+  max-height: 300px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  background: var(--surface2);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.msg-file {
+  margin-top: 6px;
+  padding: 8px 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text2);
+}
+
+.msg-file a {
+  color: var(--accent2);
+  text-decoration: none;
+}
+
+.msg-file a:hover {
+  text-decoration: underline;
+}
+
+.msg-actions {
+  position: absolute;
+  right: 10px;
+  top: 8px;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.msg-action-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  transition: all 0.15s;
+}
+
+.msg-action-btn:hover {
+  background: var(--surface3);
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.msg-action-btn.delete:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: rgba(231,76,60,0.1);
+}
+
+/* Input area */
+.input-area {
+  padding: 12px 20px 16px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.input-wrapper {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.textarea-wrap {
+  flex: 1;
+  position: relative;
+}
+
+#messageInput {
+  width: 100%;
+  min-height: 44px;
+  max-height: 200px;
+  padding: 10px 14px;
+  padding-right: 44px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 14px;
+  font-family: var(--font);
+  resize: none;
+  outline: none;
+  line-height: 1.5;
+  transition: border-color 0.2s;
+}
+
+#messageInput:focus {
+  border-color: var(--accent);
+}
+
+#messageInput::placeholder {
+  color: var(--text2);
+}
+
+.attach-btn {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  transition: color 0.15s;
+}
+
+.attach-btn:hover {
+  color: var(--accent2);
+}
+
+.send-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius);
+  border: none;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+.send-btn:hover {
+  background: var(--accent2);
+}
+
+.send-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.file-preview {
+  display: none;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text2);
+  align-items: center;
+  gap: 8px;
+}
+
+.file-preview.active {
+  display: flex;
+}
+
+.file-preview .remove-file {
+  margin-left: auto;
+  cursor: pointer;
+  color: var(--danger);
+  font-size: 16px;
+  background: none;
+  border: none;
+}
+
+.file-preview img {
+  max-height: 60px;
+  border-radius: 6px;
+}
+
+/* Message images */
+.msg-image {
+  margin-top: 6px;
+  max-width: 480px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.msg-image:hover {
+  opacity: 0.85;
+}
+
+/* Image lightbox */
+.lightbox {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.85);
+  backdrop-filter: blur(8px);
+  z-index: 300;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+}
+
+.lightbox.active {
+  display: flex;
+}
+
+.lightbox img {
+  max-width: 92vw;
+  max-height: 92vh;
+  border-radius: 8px;
+}
+
+/* Delete modal */
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(4px);
+  z-index: 100;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-overlay.active {
+  display: flex;
+}
+
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+  width: 380px;
+  max-width: 90vw;
+}
+
+.modal h3 {
+  font-size: 16px;
+  margin-bottom: 16px;
+  font-weight: 600;
+}
+
+.modal-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.modal-option {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 14px;
+  font-family: var(--font);
+  text-align: left;
+  transition: all 0.15s;
+}
+
+.modal-option:hover {
+  border-color: var(--danger);
+  background: rgba(231,76,60,0.08);
+}
+
+.modal-option.selected {
+  border-color: var(--danger);
+  background: rgba(231,76,60,0.12);
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.btn-confirm-delete {
+  background: var(--danger);
+  color: white;
+  border-color: var(--danger);
+}
+
+.btn-confirm-delete:hover {
+  background: #c0392b;
+}
+
+/* Toast */
+.toast {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--surface3);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  opacity: 0;
+  transition: all 0.3s;
+  pointer-events: none;
+  z-index: 200;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* Empty state */
+.empty-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--text2);
+  gap: 8px;
+}
+
+.empty-state svg {
+  width: 48px;
+  height: 48px;
+  opacity: 0.3;
+}
+
+/* Drop overlay */
+.drop-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(108,92,231,0.1);
+  border: 3px dashed var(--accent);
+  z-index: 50;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.drop-overlay.active {
+  display: flex;
+}
+
+.drop-overlay-label {
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  color: var(--accent2);
+  padding: 16px 32px;
+  border-radius: 14px;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+/* Enter toggle */
+.toggle-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text2);
+  cursor: pointer;
+  user-select: none;
+}
+
+.toggle-track {
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--surface3);
+  border: 1px solid var(--border);
+  position: relative;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.toggle-track.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.toggle-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: white;
+  transition: transform 0.2s;
+}
+
+.toggle-track.on::after {
+  transform: translateX(14px);
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+  .header { padding: 10px 14px; }
+  .messages-container { padding: 10px 14px; }
+  .input-area { padding: 10px 14px 14px; }
+  .user-input { width: 110px; }
+  .logo span { display: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <div class="status-dot" id="statusDot"></div>
+    <div class="logo">ShareData<span>Text Sharing</span></div>
+  </div>
+  <div class="header-right">
+    <input type="text" class="user-input" id="usernameInput" placeholder="Tu nombre..." maxlength="50">
+    <label class="toggle-wrap" id="enterToggle" title="Enviar con Enter">
+      <span>Enter envía</span>
+      <div class="toggle-track" id="enterToggleTrack"></div>
+    </label>
+    <button class="btn btn-danger" onclick="openDeleteModal()">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+      Limpiar
+    </button>
+  </div>
+</div>
+
+<div class="messages-container" id="messagesContainer">
+  <div class="empty-state" id="emptyState">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+    <span>No hay mensajes aún. Comienza a compartir.</span>
+  </div>
+</div>
+
+<div class="input-area">
+  <div class="file-preview" id="filePreview">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+    <span id="filePreviewName"></span>
+    <span id="filePreviewSize"></span>
+    <button class="remove-file" onclick="removeFile()">&times;</button>
+  </div>
+  <div class="input-wrapper">
+    <div class="textarea-wrap">
+      <textarea id="messageInput" placeholder="Escribe un mensaje o pega texto..." rows="1"></textarea>
+      <button class="attach-btn" onclick="document.getElementById('fileInput').click()" title="Adjuntar archivo">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+      </button>
+    </div>
+    <button class="send-btn" id="sendBtn" onclick="sendMessage()" title="Enviar (Ctrl+Enter)">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+    </button>
+  </div>
+  <input type="file" id="fileInput" style="display:none" onchange="handleFileSelect(this)">
+</div>
+
+<div class="modal-overlay" id="deleteModal">
+  <div class="modal">
+    <h3>Limpiar mensajes</h3>
+    <div class="modal-options">
+      <button class="modal-option" data-period="today" onclick="selectPeriod(this)">Hoy</button>
+      <button class="modal-option" data-period="week" onclick="selectPeriod(this)">Esta semana</button>
+      <button class="modal-option" data-period="month" onclick="selectPeriod(this)">Este mes</button>
+      <button class="modal-option" data-period="year" onclick="selectPeriod(this)">Este año</button>
+      <button class="modal-option" data-period="all" onclick="selectPeriod(this)">Todo</button>
+    </div>
+    <div class="modal-footer">
+      <button class="btn" onclick="closeDeleteModal()">Cancelar</button>
+      <button class="btn btn-confirm-delete" id="confirmDeleteBtn" onclick="confirmDelete()" disabled>Eliminar</button>
+    </div>
+  </div>
+</div>
+
+<div class="drop-overlay" id="dropOverlay">
+  <div class="drop-overlay-label">Suelta el archivo aquí</div>
+</div>
+<div class="toast" id="toast"></div>
+<div class="lightbox" id="lightbox" onclick="closeLightbox()">
+  <img id="lightboxImg" src="">
+</div>
+
+<script>
+const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+const WS_URL = `${wsProto}//${location.host}/ws`;
+let ws;
+let selectedPeriod = null;
+let pendingFile = null;
+let reconnectTimer = null;
+
+// ── WebSocket ──
+function connect() {
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    document.getElementById('statusDot').classList.remove('disconnected');
+    if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  };
+
+  ws.onclose = () => {
+    document.getElementById('statusDot').classList.add('disconnected');
+    reconnectTimer = setTimeout(connect, 2000);
+  };
+
+  ws.onerror = () => ws.close();
+
+  ws.onmessage = (e) => {
+    const event = JSON.parse(e.data);
+    switch (event.type) {
+      case 'new_message':
+        appendMessage(event.message);
+        break;
+      case 'messages_deleted':
+        loadMessages();
+        showToast('Mensajes eliminados');
+        break;
+      case 'message_removed':
+        const el = document.querySelector(`[data-id="${event.message.id}"]`);
+        if (el) { el.remove(); checkEmpty(); }
+        break;
+    }
+  };
+}
+
+// ── Messages ──
+async function loadMessages() {
+  try {
+    const res = await fetch('/api/messages?limit=500');
+    const data = await res.json();
+    const container = document.getElementById('messagesContainer');
+    container.innerHTML = '';
+    if (data.messages && data.messages.length > 0) {
+      data.messages.forEach(m => appendMessage(m, false));
+      scrollToBottom();
+    } else {
+      checkEmpty();
+    }
+  } catch (e) {
+    console.error('Error cargando mensajes:', e);
+  }
+}
+
+function appendMessage(msg, scroll = true) {
+  const container = document.getElementById('messagesContainer');
+  const empty = document.getElementById('emptyState');
+  if (empty) empty.remove();
+
+  const div = document.createElement('div');
+  div.className = 'message';
+  div.dataset.id = msg.id;
+
+  const initials = msg.username.substring(0, 2);
+  const time = new Date(msg.created_at).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' });
+  const date = new Date(msg.created_at).toLocaleDateString('es', { day: 'numeric', month: 'short' });
+
+  const isLarge = msg.content && msg.content.length > 500;
+  const contentClass = isLarge ? 'msg-content large-text' : 'msg-content';
+
+  const isImage = msg.has_file && msg.file_data && msg.file_data.match(/^data:image\//);
+
+  let fileHtml = '';
+  if (msg.has_file && msg.file_name) {
+    const size = formatSize(msg.file_size);
+    if (isImage) {
+      fileHtml = `
+        <img class="msg-image" src="${msg.file_data}" alt="${escapeHtml(msg.file_name)}" onclick="openLightbox(this.src)" loading="lazy">`;
+    } else {
+      fileHtml = `
+        <div class="msg-file">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+          <a href="#" onclick="downloadFile(${msg.id}, '${escapeHtml(msg.file_name)}', '${escapeHtml(msg.file_data)}'); return false;">${escapeHtml(msg.file_name)}</a>
+          <span>(${size})</span>
+        </div>`;
+    }
+  }
+
+  const copyIconSvg = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>`;
+
+  let copyBtn = '';
+  if (msg.content) {
+    copyBtn = `<button class="msg-action-btn" onclick="copyText(${msg.id})" title="Copiar texto">${copyIconSvg}</button>`;
+  }
+  if (isImage) {
+    copyBtn += `<button class="msg-action-btn" onclick="copyImage(${msg.id})" title="Copiar imagen">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+    </button>`;
+  }
+
+  div.innerHTML = `
+    <div class="msg-avatar">${escapeHtml(initials)}</div>
+    <div class="msg-body">
+      <div class="msg-header">
+        <span class="msg-user">${escapeHtml(msg.username)}</span>
+        <span class="msg-time">${date} ${time}</span>
+      </div>
+      ${msg.content ? `<div class="${contentClass}">${escapeHtml(msg.content)}</div>` : ''}
+      ${fileHtml}
+    </div>
+    <div class="msg-actions">
+      ${copyBtn}
+      <button class="msg-action-btn delete" onclick="deleteMessage(${msg.id})" title="Eliminar">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+      </button>
+    </div>`;
+
+  container.appendChild(div);
+  if (scroll) scrollToBottom();
+}
+
+function checkEmpty() {
+  const container = document.getElementById('messagesContainer');
+  if (container.querySelectorAll('.message').length === 0) {
+    container.innerHTML = `
+      <div class="empty-state" id="emptyState">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:48px;height:48px;opacity:0.3"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+        <span>No hay mensajes aún. Comienza a compartir.</span>
+      </div>`;
+  }
+}
+
+// ── Send ──
+function sendMessage() {
+  const input = document.getElementById('messageInput');
+  const content = input.value.trim();
+  const username = document.getElementById('usernameInput').value.trim() || 'Anónimo';
+
+  if (!content && !pendingFile) return;
+
+  const msg = {
+    username: username,
+    content: content,
+    has_file: !!pendingFile,
+    file_name: pendingFile ? pendingFile.name : '',
+    file_size: pendingFile ? pendingFile.size : 0,
+    file_data: pendingFile ? pendingFile.data : '',
+  };
+
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'new_message', message: msg }));
+  }
+
+  input.value = '';
+  input.style.height = 'auto';
+  removeFile();
+}
+
+// ── Files ──
+function handleFileSelect(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  // Max 20MB
+  if (file.size > 20 * 1024 * 1024) {
+    showToast('Archivo demasiado grande (max 20MB)');
+    input.value = '';
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    setPendingFile(file.name, file.size, reader.result);
+  };
+  reader.readAsDataURL(file);
+  input.value = '';
+}
+
+function removeFile() {
+  pendingFile = null;
+  const preview = document.getElementById('filePreview');
+  preview.classList.remove('active');
+  const img = preview.querySelector('img');
+  if (img) img.remove();
+}
+
+function setPendingFile(name, size, dataUrl) {
+  pendingFile = { name, size, data: dataUrl };
+  const preview = document.getElementById('filePreview');
+  // Remove old preview image if any
+  const oldImg = preview.querySelector('img');
+  if (oldImg) oldImg.remove();
+  // Add thumbnail if image
+  if (dataUrl.match(/^data:image\//)) {
+    const img = document.createElement('img');
+    img.src = dataUrl;
+    preview.insertBefore(img, preview.firstChild);
+  }
+  document.getElementById('filePreviewName').textContent = name;
+  document.getElementById('filePreviewSize').textContent = `(${formatSize(size)})`;
+  preview.classList.add('active');
+}
+
+function downloadFile(id, name, dataUrl) {
+  const a = document.createElement('a');
+  a.href = dataUrl;
+  a.download = name;
+  a.click();
+}
+
+// ── Clipboard paste (images) ──
+document.addEventListener('paste', (e) => {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      e.preventDefault();
+      const file = item.getAsFile();
+      if (!file) return;
+
+      if (file.size > 20 * 1024 * 1024) {
+        showToast('Imagen demasiado grande (max 20MB)');
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        const ext = file.type.split('/')[1] || 'png';
+        const name = `screenshot_${Date.now()}.${ext}`;
+        setPendingFile(name, file.size, reader.result);
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
+  }
+});
+
+// ── Copy text ──
+async function copyText(msgId) {
+  const el = document.querySelector(`[data-id="${msgId}"] .msg-content`);
+  if (!el) return;
+  try {
+    await navigator.clipboard.writeText(el.textContent);
+    showToast('Texto copiado al portapapeles');
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = el.textContent;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    showToast('Texto copiado al portapapeles');
+  }
+}
+
+// ── Copy image to clipboard ──
+async function copyImage(msgId) {
+  const img = document.querySelector(`[data-id="${msgId}"] .msg-image`);
+  if (!img) return;
+
+  try {
+    const res = await fetch(img.src);
+    const blob = await res.blob();
+    // Convert to PNG for clipboard compatibility
+    const bitmap = await createImageBitmap(blob);
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(bitmap, 0, 0);
+
+    canvas.toBlob(async (pngBlob) => {
+      try {
+        await navigator.clipboard.write([
+          new ClipboardItem({ 'image/png': pngBlob })
+        ]);
+        showToast('Imagen copiada al portapapeles');
+      } catch {
+        showToast('No se pudo copiar la imagen');
+      }
+    }, 'image/png');
+  } catch {
+    showToast('No se pudo copiar la imagen');
+  }
+}
+
+// ── Lightbox ──
+function openLightbox(src) {
+  document.getElementById('lightboxImg').src = src;
+  document.getElementById('lightbox').classList.add('active');
+}
+
+function closeLightbox() {
+  document.getElementById('lightbox').classList.remove('active');
+}
+
+// ── Delete ──
+async function deleteMessage(id) {
+  try {
+    await fetch(`/api/messages/delete/${id}`, { method: 'DELETE' });
+  } catch (e) {
+    showToast('Error eliminando mensaje');
+  }
+}
+
+function openDeleteModal() {
+  selectedPeriod = null;
+  document.querySelectorAll('.modal-option').forEach(b => b.classList.remove('selected'));
+  document.getElementById('confirmDeleteBtn').disabled = true;
+  document.getElementById('deleteModal').classList.add('active');
+}
+
+function closeDeleteModal() {
+  document.getElementById('deleteModal').classList.remove('active');
+}
+
+function selectPeriod(btn) {
+  document.querySelectorAll('.modal-option').forEach(b => b.classList.remove('selected'));
+  btn.classList.add('selected');
+  selectedPeriod = btn.dataset.period;
+  document.getElementById('confirmDeleteBtn').disabled = false;
+}
+
+function confirmDelete() {
+  if (!selectedPeriod) return;
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'delete_messages', period: selectedPeriod }));
+  }
+  closeDeleteModal();
+}
+
+// ── Helpers ──
+function scrollToBottom() {
+  const c = document.getElementById('messagesContainer');
+  requestAnimationFrame(() => { c.scrollTop = c.scrollHeight; });
+}
+
+function escapeHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2000);
+}
+
+// ── Enter toggle ──
+let sendWithEnter = localStorage.getItem('sharedata_enter_sends') === 'true';
+const enterTrack = document.getElementById('enterToggleTrack');
+
+function updateEnterToggle() {
+  enterTrack.classList.toggle('on', sendWithEnter);
+}
+updateEnterToggle();
+
+document.getElementById('enterToggle').addEventListener('click', () => {
+  sendWithEnter = !sendWithEnter;
+  localStorage.setItem('sharedata_enter_sends', sendWithEnter);
+  updateEnterToggle();
+});
+
+// ── Textarea auto-resize ──
+const textarea = document.getElementById('messageInput');
+textarea.addEventListener('input', () => {
+  textarea.style.height = 'auto';
+  textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px';
+});
+
+textarea.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    if (sendWithEnter && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    } else if (!sendWithEnter && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      sendMessage();
+    }
+  }
+});
+
+// ── Drag & Drop ──
+let dragCounter = 0;
+const dropOverlay = document.getElementById('dropOverlay');
+
+document.addEventListener('dragenter', (e) => {
+  e.preventDefault();
+  dragCounter++;
+  if (dragCounter === 1) dropOverlay.classList.add('active');
+});
+
+document.addEventListener('dragleave', (e) => {
+  e.preventDefault();
+  dragCounter--;
+  if (dragCounter === 0) dropOverlay.classList.remove('active');
+});
+
+document.addEventListener('dragover', (e) => {
+  e.preventDefault();
+});
+
+document.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dragCounter = 0;
+  dropOverlay.classList.remove('active');
+
+  const file = e.dataTransfer?.files?.[0];
+  if (!file) return;
+
+  if (file.size > 20 * 1024 * 1024) {
+    showToast('Archivo demasiado grande (max 20MB)');
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    setPendingFile(file.name, file.size, reader.result);
+  };
+  reader.readAsDataURL(file);
+});
+
+// ── Save username ──
+const usernameInput = document.getElementById('usernameInput');
+usernameInput.value = localStorage.getItem('sharedata_username') || '';
+usernameInput.addEventListener('input', () => {
+  localStorage.setItem('sharedata_username', usernameInput.value);
+});
+
+// ── Init ──
+connect();
+loadMessages();
+
+// Close modal on overlay click
+document.getElementById('deleteModal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeDeleteModal();
+});
+</script>
+
+</body>
+</html>
