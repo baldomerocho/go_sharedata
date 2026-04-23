@@ -1,22 +1,30 @@
 package main
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"database/sql"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io/fs"
 	"log"
 	"math/big"
+	mrand "math/rand"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,13 +36,26 @@ import (
 var staticFiles embed.FS
 
 const (
-	dbHost     = "postgres-db"
-	dbPort     = 5432
-	dbUser     = "root"
-	dbPassword = "root"
-	dbName     = "sharedata"
-	serverPort = ":8844"
+	dbHost      = "postgres-db"
+	dbPort      = 5432
+	dbUser      = "root"
+	dbPassword  = "root"
+	dbName      = "sharedata"
+	serverPort  = ":8844"
+	otpURL      = "http://otp-show-app-1:5066/api/otps"
+	otpChannel  = 1
+	otpTTL      = 5 * time.Minute
+	jwtTTL      = 30 * 24 * time.Hour
 )
+
+var jwtSecret = []byte(getenv("JWT_SECRET", "sharedata-secret-change-me-in-prod-9f3ac7"))
+
+func getenv(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
+}
 
 var (
 	db       *sql.DB
@@ -92,31 +113,57 @@ func main() {
 	}
 	log.Println("Conectado a PostgreSQL")
 
+	if err := migrate(); err != nil {
+		log.Fatal("Error ejecutando migraciones:", err)
+	}
+
+	http.HandleFunc("/api/auth/login", handleLogin)
+	http.HandleFunc("/api/auth/verify", handleVerify)
+	http.HandleFunc("/api/auth/me", authMW(handleMe))
+
 	http.HandleFunc("/ws", handleWebSocket)
-	http.HandleFunc("/api/channels", handleChannels)
-	http.HandleFunc("/api/channels/", handleChannelAction)
-	http.HandleFunc("/api/messages", handleMessages)
-	http.HandleFunc("/api/messages/delete", handleDeleteMessages)
-	http.HandleFunc("/api/messages/delete/", handleDeleteSingleMessage)
-	http.Handle("/", http.FileServer(http.FS(staticFiles)))
-
-	tlsCert, err := generateSelfSignedCert()
+	http.HandleFunc("/api/channels", authMW(handleChannels))
+	http.HandleFunc("/api/channels/", authMW(handleChannelAction))
+	http.HandleFunc("/api/messages", authMW(handleMessages))
+	http.HandleFunc("/api/messages/delete", authMW(handleDeleteMessages))
+	http.HandleFunc("/api/messages/delete/", authMW(handleDeleteSingleMessage))
+	staticFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
-		log.Fatal("Error generando certificado TLS:", err)
+		log.Fatal("Error montando static:", err)
 	}
+	http.Handle("/", http.FileServer(http.FS(staticFS)))
 
-	server := &http.Server{
-		Addr:      serverPort,
-		TLSConfig: &tls.Config{Certificates: []tls.Certificate{tlsCert}},
+	useTLS := strings.EqualFold(getenv("TLS", "true"), "true")
+
+	server := &http.Server{Addr: serverPort}
+
+	if useTLS {
+		tlsCert, err := generateSelfSignedCert()
+		if err != nil {
+			log.Fatal("Error generando certificado TLS:", err)
+		}
+		server.TLSConfig = &tls.Config{Certificates: []tls.Certificate{tlsCert}}
+		log.Printf("ShareData corriendo en https://0.0.0.0%s", serverPort)
+		log.Fatal(server.ListenAndServeTLS("", ""))
+	} else {
+		log.Printf("ShareData corriendo en http://0.0.0.0%s (TLS desactivado — detrás de proxy)", serverPort)
+		log.Fatal(server.ListenAndServe())
 	}
-
-	log.Printf("ShareData corriendo en https://0.0.0.0%s", serverPort)
-	log.Fatal(server.ListenAndServeTLS("", ""))
 }
 
 // ── WebSocket ──
 
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		http.Error(w, "Unauthorized", 401)
+		return
+	}
+	if _, err := verifyJWT(token); err != nil {
+		http.Error(w, "Unauthorized", 401)
+		return
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Println("Error upgrade WS:", err)
@@ -437,6 +484,226 @@ func deleteMessages(period string, channelID int) (int64, error) {
 		go db.Exec("VACUUM messages")
 	}
 	return count, nil
+}
+
+// ── Auth / OTP / JWT ──
+
+func migrate() error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS users (
+			id SERIAL PRIMARY KEY,
+			phone VARCHAR(30) UNIQUE NOT NULL,
+			name VARCHAR(100),
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+		)`,
+		`CREATE TABLE IF NOT EXISTS otps (
+			id SERIAL PRIMARY KEY,
+			phone VARCHAR(30) NOT NULL,
+			code VARCHAR(6) NOT NULL,
+			expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+			used BOOLEAN DEFAULT FALSE,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_otps_phone ON otps(phone, created_at DESC)`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			return err
+		}
+	}
+	var n int
+	db.QueryRow("SELECT COUNT(*) FROM users").Scan(&n)
+	if n == 0 {
+		log.Println("⚠  No hay usuarios registrados. Registra uno con:")
+		log.Println("    INSERT INTO users (phone, name) VALUES ('+593XXXXXXXXX', 'Nombre');")
+	}
+	return nil
+}
+
+func signJWT(phone string) (string, error) {
+	header := map[string]string{"alg": "HS256", "typ": "JWT"}
+	claims := map[string]any{
+		"phone": phone,
+		"iat":   time.Now().Unix(),
+		"exp":   time.Now().Add(jwtTTL).Unix(),
+	}
+	hb, _ := json.Marshal(header)
+	cb, _ := json.Marshal(claims)
+	h := base64.RawURLEncoding.EncodeToString(hb)
+	c := base64.RawURLEncoding.EncodeToString(cb)
+	unsigned := h + "." + c
+	mac := hmac.New(sha256.New, jwtSecret)
+	mac.Write([]byte(unsigned))
+	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return unsigned + "." + sig, nil
+}
+
+func verifyJWT(token string) (map[string]any, error) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("token inválido")
+	}
+	mac := hmac.New(sha256.New, jwtSecret)
+	mac.Write([]byte(parts[0] + "." + parts[1]))
+	expected := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	if !hmac.Equal([]byte(expected), []byte(parts[2])) {
+		return nil, fmt.Errorf("firma inválida")
+	}
+	cb, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, err
+	}
+	var claims map[string]any
+	if err := json.Unmarshal(cb, &claims); err != nil {
+		return nil, err
+	}
+	if exp, ok := claims["exp"].(float64); ok {
+		if time.Now().Unix() > int64(exp) {
+			return nil, fmt.Errorf("expirado")
+		}
+	}
+	return claims, nil
+}
+
+func authMW(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var token string
+		if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+			token = h[7:]
+		}
+		if token == "" {
+			token = r.URL.Query().Get("token")
+		}
+		if token == "" {
+			http.Error(w, "Unauthorized", 401)
+			return
+		}
+		claims, err := verifyJWT(token)
+		if err != nil {
+			http.Error(w, "Unauthorized", 401)
+			return
+		}
+		r.Header.Set("X-Phone", fmt.Sprint(claims["phone"]))
+		next(w, r)
+	}
+}
+
+func sendOTP(code, phone string) error {
+	body, _ := json.Marshal(map[string]any{
+		"body":       code,
+		"number":     phone,
+		"created_at": time.Now().UTC().Format(time.RFC3339),
+		"channel":    strconv.Itoa(otpChannel),
+	})
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Post(otpURL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("otp service respondió %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func handleLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", 405)
+		return
+	}
+	var req struct {
+		Phone string `json:"phone"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad request", 400)
+		return
+	}
+	phone := strings.TrimSpace(req.Phone)
+	if phone == "" {
+		http.Error(w, "Teléfono requerido", 400)
+		return
+	}
+
+	var exists bool
+	db.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE phone = $1)", phone).Scan(&exists)
+	if !exists {
+		http.Error(w, "Número no registrado", 403)
+		return
+	}
+
+	code := fmt.Sprintf("%06d", mrand.Intn(1000000))
+	expiresAt := time.Now().Add(otpTTL)
+	if _, err := db.Exec("INSERT INTO otps (phone, code, expires_at) VALUES ($1, $2, $3)", phone, code, expiresAt); err != nil {
+		http.Error(w, "Error interno", 500)
+		return
+	}
+
+	if err := sendOTP(code, phone); err != nil {
+		log.Println("Error enviando OTP:", err)
+		http.Error(w, "No se pudo enviar el código", 502)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"ok": true, "ttl": int(otpTTL.Seconds())})
+}
+
+func handleVerify(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", 405)
+		return
+	}
+	var req struct {
+		Phone string `json:"phone"`
+		Code  string `json:"code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Bad request", 400)
+		return
+	}
+	phone := strings.TrimSpace(req.Phone)
+	code := strings.TrimSpace(req.Code)
+	if phone == "" || len(code) != 6 {
+		http.Error(w, "Datos inválidos", 400)
+		return
+	}
+
+	var id int
+	err := db.QueryRow(`
+		SELECT id FROM otps
+		WHERE phone = $1 AND code = $2 AND used = false AND expires_at > NOW()
+		ORDER BY created_at DESC LIMIT 1`, phone, code).Scan(&id)
+	if err != nil {
+		http.Error(w, "Código inválido o expirado", 401)
+		return
+	}
+	db.Exec("UPDATE otps SET used = true WHERE id = $1", id)
+	db.Exec("DELETE FROM otps WHERE expires_at < NOW() - INTERVAL '1 day'")
+
+	token, err := signJWT(phone)
+	if err != nil {
+		http.Error(w, "Error firmando token", 500)
+		return
+	}
+
+	var name sql.NullString
+	db.QueryRow("SELECT name FROM users WHERE phone = $1", phone).Scan(&name)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"token": token,
+		"phone": phone,
+		"name":  name.String,
+	})
+}
+
+func handleMe(w http.ResponseWriter, r *http.Request) {
+	phone := r.Header.Get("X-Phone")
+	var name sql.NullString
+	db.QueryRow("SELECT name FROM users WHERE phone = $1", phone).Scan(&name)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"phone": phone, "name": name.String})
 }
 
 // ── TLS ──

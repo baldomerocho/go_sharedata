@@ -760,6 +760,116 @@ body {
   .btn-clean span { display: none; }
   .msg-img { max-width: 100%; }
 }
+
+/* ── Login ── */
+.login {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 20px;
+}
+.login.active { display: flex; }
+.login-card {
+  width: 100%;
+  max-width: 360px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 32px 28px;
+}
+.login-logo {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--gold);
+  text-align: center;
+  margin-bottom: 6px;
+}
+.login-sub {
+  text-align: center;
+  color: var(--text2);
+  font-size: 12px;
+  margin-bottom: 24px;
+}
+.login-field {
+  display: block;
+  font-size: 11px;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 8px;
+}
+.login-input {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  color: var(--text);
+  font-size: 14px;
+  font-family: var(--font);
+  outline: none;
+  transition: border-color .15s;
+}
+.login-input:focus { border-color: var(--gold); }
+.login-input.code { text-align: center; letter-spacing: 0.4em; font-size: 20px; font-family: var(--mono); }
+.login-btn {
+  width: 100%;
+  margin-top: 16px;
+  padding: 12px;
+  background: var(--gold);
+  color: #000;
+  border: none;
+  border-radius: 8px;
+  font-family: var(--font);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: background .15s;
+}
+.login-btn:hover:not(:disabled) { background: var(--gold2); }
+.login-btn:disabled { opacity: .5; cursor: not-allowed; }
+.login-link {
+  display: block;
+  margin-top: 14px;
+  text-align: center;
+  background: none;
+  border: none;
+  color: var(--text2);
+  font-size: 12px;
+  cursor: pointer;
+  font-family: var(--font);
+}
+.login-link:hover { color: var(--gold); }
+.login-err {
+  margin-top: 14px;
+  padding: 10px 12px;
+  background: var(--red-dim);
+  border: 1px solid rgba(192,57,43,0.3);
+  border-radius: 6px;
+  color: #e8a39a;
+  font-size: 12px;
+  display: none;
+}
+.login-err.show { display: block; }
+.logout-btn {
+  background: transparent;
+  border: 1px solid var(--border2);
+  color: var(--text2);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: var(--font);
+  transition: all .15s;
+}
+.logout-btn:hover { border-color: var(--red); color: var(--red); }
 </style>
 </head>
 <body>
@@ -774,6 +884,10 @@ body {
     </button>
   </div>
   <div class="sidebar-list" id="chList"></div>
+  <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px">
+    <span id="sessionPhone" style="font-size:11px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+    <button class="logout-btn" onclick="logout()">Salir</button>
+  </div>
 </div>
 
 <div class="main">
@@ -873,12 +987,122 @@ body {
 
 <div class="toast" id="toast"></div>
 
+<div class="login active" id="loginOverlay">
+  <div class="login-card">
+    <div class="login-logo">ShareData</div>
+    <div class="login-sub">Acceso seguro</div>
+
+    <div id="loginStep1">
+      <label class="login-field">Teléfono</label>
+      <input type="tel" id="loginPhone" class="login-input" placeholder="+593987654321" autocomplete="tel">
+      <button class="login-btn" id="loginSendBtn" onclick="doLogin()">Enviar código</button>
+    </div>
+
+    <div id="loginStep2" style="display:none">
+      <label class="login-field">Código de verificación</label>
+      <input type="text" id="loginCode" class="login-input code" inputmode="numeric" maxlength="6" placeholder="••••••" autocomplete="one-time-code">
+      <button class="login-btn" id="loginVerifyBtn" onclick="doVerify()">Verificar</button>
+      <button class="login-link" onclick="backToPhone()">Cambiar número</button>
+    </div>
+
+    <div class="login-err" id="loginErr"></div>
+  </div>
+</div>
+
 <script>
-const W = `${location.protocol==='https:'?'wss:':'ws:'}//${location.host}/ws`;
 let ws, chId = +localStorage.getItem('sd_ch') || 1, chs = [], period = null, pFile = null, renId = null;
+
+// ── Auth ──
+function getToken() { return localStorage.getItem('sd_token') || ''; }
+function setToken(t) { localStorage.setItem('sd_token', t); }
+function clearToken() { localStorage.removeItem('sd_token'); localStorage.removeItem('sd_phone'); }
+
+async function api(url, opts={}) {
+  opts.headers = opts.headers || {};
+  const t = getToken();
+  if (t) opts.headers['Authorization'] = 'Bearer ' + t;
+  const r = await fetch(url, opts);
+  if (r.status === 401) { clearToken(); showLogin(); throw new Error('Unauthorized'); }
+  return r;
+}
+
+function showLogin() {
+  document.getElementById('loginOverlay').classList.add('active');
+  document.getElementById('loginStep1').style.display = '';
+  document.getElementById('loginStep2').style.display = 'none';
+  document.getElementById('loginErr').classList.remove('show');
+  if (ws) { try { ws.close(); } catch(e) {} ws = null; }
+}
+
+function hideLogin() { document.getElementById('loginOverlay').classList.remove('active'); }
+
+function loginErr(msg) {
+  const e = document.getElementById('loginErr');
+  e.textContent = msg; e.classList.add('show');
+}
+
+async function doLogin() {
+  const phone = document.getElementById('loginPhone').value.trim();
+  if (!phone) { loginErr('Ingresa un teléfono'); return; }
+  const btn = document.getElementById('loginSendBtn');
+  btn.disabled = true; btn.textContent = 'Enviando...';
+  document.getElementById('loginErr').classList.remove('show');
+  try {
+    const r = await fetch('/api/auth/login', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone})});
+    if (!r.ok) {
+      const t = await r.text();
+      loginErr(t || 'Error');
+      btn.disabled = false; btn.textContent = 'Enviar código';
+      return;
+    }
+    localStorage.setItem('sd_phone', phone);
+    document.getElementById('loginStep1').style.display = 'none';
+    document.getElementById('loginStep2').style.display = '';
+    document.getElementById('loginCode').value = '';
+    setTimeout(()=>document.getElementById('loginCode').focus(), 50);
+  } catch(e) { loginErr('No se pudo contactar el servidor'); }
+  btn.disabled = false; btn.textContent = 'Enviar código';
+}
+
+async function doVerify() {
+  const phone = localStorage.getItem('sd_phone') || '';
+  const code = document.getElementById('loginCode').value.trim();
+  if (code.length !== 6) { loginErr('Código de 6 dígitos'); return; }
+  const btn = document.getElementById('loginVerifyBtn');
+  btn.disabled = true; btn.textContent = 'Verificando...';
+  document.getElementById('loginErr').classList.remove('show');
+  try {
+    const r = await fetch('/api/auth/verify', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone, code})});
+    if (!r.ok) {
+      const t = await r.text();
+      loginErr(t || 'Código inválido');
+      btn.disabled = false; btn.textContent = 'Verificar';
+      return;
+    }
+    const data = await r.json();
+    setToken(data.token);
+    document.getElementById('sessionPhone').textContent = data.phone;
+    hideLogin();
+    bootApp();
+  } catch(e) { loginErr('Error de red'); }
+  btn.disabled = false; btn.textContent = 'Verificar';
+}
+
+function backToPhone() {
+  document.getElementById('loginStep1').style.display = '';
+  document.getElementById('loginStep2').style.display = 'none';
+  document.getElementById('loginErr').classList.remove('show');
+}
+
+function logout() {
+  clearToken();
+  showLogin();
+}
 
 // WS
 function conn() {
+  if (!getToken()) { showLogin(); return; }
+  const W = `${location.protocol==='https:'?'wss:':'ws:'}//${location.host}/ws?token=${encodeURIComponent(getToken())}`;
   ws = new WebSocket(W);
   ws.onopen = () => document.getElementById('statusDot').classList.remove('disconnected');
   ws.onclose = () => { document.getElementById('statusDot').classList.add('disconnected'); setTimeout(conn, 2000); };
@@ -902,7 +1126,7 @@ function conn() {
 
 // Channels
 async function loadChs() {
-  chs = await (await fetch('/api/channels')).json();
+  chs = await (await api('/api/channels')).json();
   const list = document.getElementById('chList');
   list.innerHTML = '';
   chs.forEach(c => {
@@ -924,24 +1148,24 @@ function openNewChat() { document.getElementById('newChName').value=''; showModa
 async function doNewChat() {
   const n = document.getElementById('newChName').value.trim();
   if (!n) return;
-  const c = await (await fetch('/api/channels',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})})).json();
+  const c = await (await api('/api/channels',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})})).json();
   closeModal('newChModal'); await loadChs(); switchCh(c.id);
 }
 
-async function delCh(id) { if (!confirm('¿Eliminar este chat y sus mensajes?')) return; await fetch(`/api/channels/${id}`,{method:'DELETE'}); }
+async function delCh(id) { if (!confirm('¿Eliminar este chat y sus mensajes?')) return; await api(`/api/channels/${id}`,{method:'DELETE'}); }
 
 function openRename(id, name) { renId = id; document.getElementById('renameVal').value = name; showModal('renameModal'); setTimeout(()=>document.getElementById('renameVal').focus(),50); }
 
 async function doRename() {
   const n = document.getElementById('renameVal').value.trim();
   if (!n || !renId) return;
-  await fetch(`/api/channels/${renId}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});
+  await api(`/api/channels/${renId}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});
   closeModal('renameModal');
 }
 
 // Messages
 async function loadMsgs() {
-  const data = await (await fetch(`/api/messages?channel_id=${chId}&limit=500`)).json();
+  const data = await (await api(`/api/messages?channel_id=${chId}&limit=500`)).json();
   const box = document.getElementById('msgBox');
   box.innerHTML = '';
   if (data.messages?.length) { data.messages.forEach(m => addMsg(m, false)); scrollEnd(); }
@@ -1057,7 +1281,7 @@ async function cpImg(id) {
 }
 
 // Delete
-async function delMsg(id) { await fetch(`/api/messages/delete/${id}`,{method:'DELETE'}); }
+async function delMsg(id) { await api(`/api/messages/delete/${id}`,{method:'DELETE'}); }
 
 function openCleanModal() { period=null; document.querySelectorAll('.modal-opt').forEach(b=>b.classList.remove('sel')); document.getElementById('delBtn').disabled=true; showModal('cleanModal'); }
 function selPeriod(b) { document.querySelectorAll('.modal-opt').forEach(x=>x.classList.remove('sel')); b.classList.add('sel'); period=b.dataset.p; document.getElementById('delBtn').disabled=false; }
@@ -1119,7 +1343,24 @@ ni.value = localStorage.getItem('sd_user') || '';
 ni.addEventListener('input', () => localStorage.setItem('sd_user', ni.value));
 
 // Init
-conn(); loadChs(); loadMsgs();
+function bootApp() {
+  hideLogin();
+  const saved = localStorage.getItem('sd_phone');
+  if (saved) document.getElementById('sessionPhone').textContent = saved;
+  conn(); loadChs(); loadMsgs();
+}
+
+if (getToken()) bootApp();
+else showLogin();
+
+document.getElementById('loginPhone').addEventListener('keydown', e => { if (e.key==='Enter') doLogin(); });
+document.getElementById('loginCode').addEventListener('keydown', e => { if (e.key==='Enter') doVerify(); });
+document.getElementById('loginCode').addEventListener('input', e => {
+  e.target.value = e.target.value.replace(/\D/g,'').slice(0,6);
+  if (e.target.value.length === 6) doVerify();
+});
+const savedPhone = localStorage.getItem('sd_phone');
+if (savedPhone) document.getElementById('loginPhone').value = savedPhone;
 </script>
 </body>
 </html>

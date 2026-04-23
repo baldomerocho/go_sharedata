@@ -4,10 +4,16 @@ services:
     container_name: sharedata
     ports:
       - "8844:8844"
+    environment:
+      JWT_SECRET: ${JWT_SECRET:-sharedata-secret-change-me-in-prod-9f3ac7}
+      TLS: "false"
     networks:
       - databases_default
+      - web-network
     restart: unless-stopped
 
 networks:
   databases_default:
+    external: true
+  web-network:
     external: true
