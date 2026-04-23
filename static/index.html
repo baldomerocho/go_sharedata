@@ -8,21 +8,21 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root {
-  --bg: #09090b;
-  --surface: #0f0f12;
-  --surface2: #16161a;
-  --surface3: #1c1c22;
-  --border: #232329;
-  --border2: #2c2c35;
-  --text: #ececf0;
-  --text2: #6e6e7a;
-  --text3: #44444e;
+  --bg: #101014;
+  --surface: #17171c;
+  --surface2: #1e1e24;
+  --surface3: #272730;
+  --border: #2e2e36;
+  --border2: #707080;
+  --text: #ededf1;
+  --text2: #b4b4c0;
+  --text3: #82828e;
   --gold: #c8a855;
   --gold2: #e0c872;
-  --gold-dim: rgba(200,168,85,0.08);
-  --gold-dim2: rgba(200,168,85,0.15);
-  --red: #c0392b;
-  --red-dim: rgba(192,57,43,0.1);
+  --gold-dim: rgba(200,168,85,0.1);
+  --gold-dim2: rgba(200,168,85,0.18);
+  --red: #ef4444;
+  --red-dim: rgba(239,68,68,0.12);
   --green: #2ecc71;
   --radius: 10px;
   --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
@@ -723,7 +723,7 @@ body {
   font-size: 13px;
 }
 
-.empty svg { width: 40px; height: 40px; opacity: 0.25; stroke-width: 1; }
+.empty svg { width: 40px; height: 40px; opacity: 0.4; stroke-width: 1; }
 
 /* ── Mobile overlay backdrop ── */
 .sidebar-backdrop {
@@ -851,7 +851,7 @@ body {
   margin-top: 14px;
   padding: 10px 12px;
   background: var(--red-dim);
-  border: 1px solid rgba(192,57,43,0.3);
+  border: 1px solid rgba(239,68,68,0.35);
   border-radius: 6px;
   color: #e8a39a;
   font-size: 12px;
@@ -879,6 +879,9 @@ body {
 <div class="sidebar" id="sidebar">
   <div class="sidebar-header">
     <span class="logo">ShareData</span>
+    <span id="lockBadge" title="Cifrado extremo a extremo activo" style="display:none;color:var(--gold);margin-right:auto;margin-left:8px">
+      <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
+    </span>
     <button class="icon-btn" onclick="openNewChat()" title="Nuevo chat">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
     </button>
@@ -886,7 +889,10 @@ body {
   <div class="sidebar-list" id="chList"></div>
   <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px">
     <span id="sessionPhone" style="font-size:11px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
-    <button class="logout-btn" onclick="logout()">Salir</button>
+    <div style="display:flex;gap:6px">
+      <button class="logout-btn" onclick="relock()" title="Bloquear cifrado">🔒</button>
+      <button class="logout-btn" onclick="logout()">Salir</button>
+    </div>
   </div>
 </div>
 
@@ -1005,12 +1011,58 @@ body {
       <button class="login-link" onclick="backToPhone()">Cambiar número</button>
     </div>
 
+    <div id="loginStep3" style="display:none">
+      <label class="login-field">Frase de cifrado</label>
+      <div class="login-sub" style="margin:-2px 0 14px;text-align:left">El servidor nunca la ve. Todos en el workspace deben usar la misma.</div>
+      <input type="password" id="loginPass" class="login-input" placeholder="••••••••••" autocomplete="off">
+      <button class="login-btn" id="loginPassBtn" onclick="doUnlock()">Desbloquear</button>
+    </div>
+
     <div class="login-err" id="loginErr"></div>
   </div>
 </div>
 
 <script>
 let ws, chId = +localStorage.getItem('sd_ch') || 1, chs = [], period = null, pFile = null, renId = null;
+
+// ── E2EE (PBKDF2 → AES-256-GCM) ──
+const ENC_VER = 'E1';
+const ENC_SALT = 'sharedata/v1/ws-salt';
+const ENC_ITER = 200000;
+let cryptoKey = null;
+
+function b64uEnc(u8) { let s=''; for(const b of u8) s+=String.fromCharCode(b); return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
+function b64uDec(s) { s=s.replace(/-/g,'+').replace(/_/g,'/'); while(s.length%4) s+='='; const bin=atob(s); const u=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) u[i]=bin.charCodeAt(i); return u; }
+
+async function deriveKey(pass) {
+  const enc = new TextEncoder();
+  const km = await crypto.subtle.importKey('raw', enc.encode(pass), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: enc.encode(ENC_SALT), iterations: ENC_ITER, hash: 'SHA-256' },
+    km,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt','decrypt']
+  );
+}
+
+async function encField(plain) {
+  if (!plain || !cryptoKey) return plain || '';
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv}, cryptoKey, new TextEncoder().encode(String(plain))));
+  return ENC_VER + ':' + b64uEnc(iv) + ':' + b64uEnc(ct);
+}
+
+async function decField(s) {
+  if (!s) return '';
+  if (typeof s !== 'string' || !s.startsWith(ENC_VER + ':')) return s;
+  if (!cryptoKey) return '🔒 cifrado';
+  try {
+    const [, ivb, ctb] = s.split(':');
+    const pt = await crypto.subtle.decrypt({name:'AES-GCM',iv:b64uDec(ivb)}, cryptoKey, b64uDec(ctb));
+    return new TextDecoder().decode(pt);
+  } catch { return '🔒 no se pudo descifrar'; }
+}
 
 // ── Auth ──
 function getToken() { return localStorage.getItem('sd_token') || ''; }
@@ -1030,8 +1082,19 @@ function showLogin() {
   document.getElementById('loginOverlay').classList.add('active');
   document.getElementById('loginStep1').style.display = '';
   document.getElementById('loginStep2').style.display = 'none';
+  document.getElementById('loginStep3').style.display = 'none';
   document.getElementById('loginErr').classList.remove('show');
   if (ws) { try { ws.close(); } catch(e) {} ws = null; }
+}
+
+function showUnlock() {
+  document.getElementById('loginOverlay').classList.add('active');
+  document.getElementById('loginStep1').style.display = 'none';
+  document.getElementById('loginStep2').style.display = 'none';
+  document.getElementById('loginStep3').style.display = '';
+  document.getElementById('loginErr').classList.remove('show');
+  document.getElementById('loginPass').value = '';
+  setTimeout(()=>document.getElementById('loginPass').focus(), 50);
 }
 
 function hideLogin() { document.getElementById('loginOverlay').classList.remove('active'); }
@@ -1082,10 +1145,32 @@ async function doVerify() {
     const data = await r.json();
     setToken(data.token);
     document.getElementById('sessionPhone').textContent = data.phone;
-    hideLogin();
-    bootApp();
+    showUnlock();
   } catch(e) { loginErr('Error de red'); }
   btn.disabled = false; btn.textContent = 'Verificar';
+}
+
+async function doUnlock() {
+  const pass = document.getElementById('loginPass').value;
+  if (!pass) { loginErr('Ingresa la frase'); return; }
+  const btn = document.getElementById('loginPassBtn');
+  btn.disabled = true; btn.textContent = 'Derivando...';
+  document.getElementById('loginErr').classList.remove('show');
+  try {
+    cryptoKey = await deriveKey(pass);
+    sessionStorage.setItem('sd_pass', pass);
+    document.getElementById('lockBadge').style.display = 'inline-flex';
+    hideLogin();
+    bootApp();
+  } catch(e) { loginErr('Error derivando clave'); }
+  btn.disabled = false; btn.textContent = 'Desbloquear';
+}
+
+function relock() {
+  cryptoKey = null;
+  sessionStorage.removeItem('sd_pass');
+  document.getElementById('lockBadge').style.display = 'none';
+  showUnlock();
 }
 
 function backToPhone() {
@@ -1096,12 +1181,16 @@ function backToPhone() {
 
 function logout() {
   clearToken();
+  cryptoKey = null;
+  sessionStorage.removeItem('sd_pass');
+  document.getElementById('lockBadge').style.display = 'none';
   showLogin();
 }
 
 // WS
 function conn() {
   if (!getToken()) { showLogin(); return; }
+  if (ws) { ws.onclose = null; ws.onerror = null; ws.onmessage = null; try { ws.close(); } catch(e) {} ws = null; }
   const W = `${location.protocol==='https:'?'wss:':'ws:'}//${location.host}/ws?token=${encodeURIComponent(getToken())}`;
   ws = new WebSocket(W);
   ws.onopen = () => document.getElementById('statusDot').classList.remove('disconnected');
@@ -1168,11 +1257,19 @@ async function loadMsgs() {
   const data = await (await api(`/api/messages?channel_id=${chId}&limit=500`)).json();
   const box = document.getElementById('msgBox');
   box.innerHTML = '';
-  if (data.messages?.length) { data.messages.forEach(m => addMsg(m, false)); scrollEnd(); }
-  else chkEmpty();
+  if (data.messages?.length) {
+    for (const m of data.messages) await addMsg(m, false);
+    scrollEnd();
+  } else chkEmpty();
 }
 
-function addMsg(m, scroll=true) {
+async function addMsg(m, scroll=true) {
+  if (document.querySelector(`[data-id="${m.id}"]`)) return;
+  m = {...m,
+    content: await decField(m.content),
+    file_name: m.file_name ? await decField(m.file_name) : '',
+    file_data: m.file_data ? await decField(m.file_data) : '',
+  };
   const box = document.getElementById('msgBox');
   const emp = document.getElementById('emptyState');
   if (emp) emp.remove();
@@ -1202,16 +1299,20 @@ function addMsg(m, scroll=true) {
 
 function chkEmpty() {
   const box = document.getElementById('msgBox');
-  if (!box.querySelector('.msg')) box.innerHTML = `<div class="empty" id="emptyState"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" style="width:40px;height:40px;opacity:.25;stroke-width:1"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg><span>Sin mensajes</span></div>`;
+  if (!box.querySelector('.msg')) box.innerHTML = `<div class="empty" id="emptyState"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" style="width:40px;height:40px;opacity:.4;stroke-width:1"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg><span>Sin mensajes</span></div>`;
 }
 
 // Send
-function send() {
+async function send() {
   const inp = document.getElementById('msgInput');
   const txt = inp.value.trim();
   const user = document.getElementById('nameInput').value.trim() || 'Anónimo';
   if (!txt && !pFile) return;
-  if (ws?.readyState === 1) ws.send(JSON.stringify({type:'new_message',message:{channel_id:chId,username:user,content:txt,has_file:!!pFile,file_name:pFile?.name||'',file_size:pFile?.size||0,file_data:pFile?.data||''}}));
+  if (!cryptoKey) { toast('Desbloquea el cifrado primero'); showUnlock(); return; }
+  const cTxt = await encField(txt);
+  const cName = pFile ? await encField(pFile.name) : '';
+  const cData = pFile ? await encField(pFile.data) : '';
+  if (ws?.readyState === 1) ws.send(JSON.stringify({type:'new_message',message:{channel_id:chId,username:user,content:cTxt,has_file:!!pFile,file_name:cName,file_size:pFile?.size||0,file_data:cData}}));
   inp.value = ''; inp.style.height = 'auto'; rmFile();
 }
 
@@ -1347,14 +1448,27 @@ function bootApp() {
   hideLogin();
   const saved = localStorage.getItem('sd_phone');
   if (saved) document.getElementById('sessionPhone').textContent = saved;
+  document.getElementById('lockBadge').style.display = cryptoKey ? 'inline-flex' : 'none';
   conn(); loadChs(); loadMsgs();
 }
 
-if (getToken()) bootApp();
-else showLogin();
+async function initAuth() {
+  if (!getToken()) { showLogin(); return; }
+  const savedPass = sessionStorage.getItem('sd_pass');
+  if (savedPass) {
+    try {
+      cryptoKey = await deriveKey(savedPass);
+      bootApp();
+      return;
+    } catch {}
+  }
+  showUnlock();
+}
+initAuth();
 
 document.getElementById('loginPhone').addEventListener('keydown', e => { if (e.key==='Enter') doLogin(); });
 document.getElementById('loginCode').addEventListener('keydown', e => { if (e.key==='Enter') doVerify(); });
+document.getElementById('loginPass').addEventListener('keydown', e => { if (e.key==='Enter') doUnlock(); });
 document.getElementById('loginCode').addEventListener('input', e => {
   e.target.value = e.target.value.replace(/\D/g,'').slice(0,6);
   if (e.target.value.length === 6) doVerify();
