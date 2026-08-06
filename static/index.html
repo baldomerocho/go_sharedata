@@ -1302,6 +1302,60 @@ button, input, textarea { font-family: inherit; }
   transition: border-color var(--t-fast), box-shadow var(--t-fast);
 }
 .login-input:focus { border-color: var(--gold); box-shadow: 0 0 0 3px var(--gold-glow); }
+
+/* Código de país (combobox con búsqueda) + número */
+.phone-row { display: flex; gap: 8px; align-items: flex-start; }
+.cc-combo {
+  position: relative;
+  width: 92px;
+  flex-shrink: 0;
+  transition: width var(--t-base);
+}
+/* Al buscar hace falta sitio para escribir el nombre del país */
+.cc-combo:focus-within { width: 168px; }
+.cc-input {
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+}
+.phone-input { flex: 1; min-width: 0; }
+
+.cc-list {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 268px;
+  max-height: 244px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--bg-elev);
+  border: 1px solid var(--border2);
+  border-radius: 9px;
+  box-shadow: var(--shadow-lg);
+  z-index: 30;
+}
+.cc-list.open { display: block; }
+.cc-opt {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text2);
+}
+.cc-opt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-opt-cc { color: var(--text3); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.cc-opt[aria-selected="true"], .cc-opt:hover {
+  background: var(--gold-dim);
+  color: var(--text);
+}
+.cc-opt[aria-selected="true"] .cc-opt-cc { color: var(--gold); }
+.cc-opt mark { background: none; color: var(--gold); font-weight: 600; }
+.cc-empty { padding: 10px; font-size: 12px; color: var(--text3); text-align: center; }
 .login-input.code {
   text-align: center;
   letter-spacing: 0.4em;
@@ -1670,8 +1724,16 @@ button, input, textarea { font-family: inherit; }
     </div>
 
     <div id="loginStep1">
-      <label class="login-field">Teléfono</label>
-      <input type="tel" id="loginPhone" class="login-input" placeholder="+593987654321" autocomplete="tel">
+      <label class="login-field" for="loginPhone">Teléfono</label>
+      <div class="phone-row">
+        <div class="cc-combo">
+          <input type="text" id="loginCC" class="login-input cc-input" role="combobox"
+                 aria-expanded="false" aria-controls="ccList" aria-autocomplete="list"
+                 aria-label="Código de país" autocomplete="off" spellcheck="false" placeholder="+502">
+          <ul class="cc-list" id="ccList" role="listbox" aria-label="Países"></ul>
+        </div>
+        <input type="tel" id="loginPhone" class="login-input phone-input" placeholder="Número" autocomplete="tel-national" inputmode="tel">
+      </div>
       <button class="login-btn" id="loginSendBtn" onclick="doLogin()">Enviar código</button>
     </div>
 
@@ -1781,6 +1843,235 @@ async function decField(s) {
 }
 
 // ── Auth ──
+// ── Catálogo de países ──
+// Solo se almacenan los prefijos E.164 y el mapa zona horaria → país (4,7 KB).
+// Los nombres los traduce Intl.DisplayNames al idioma del usuario y las banderas
+// se derivan del código ISO, así que ninguno de los dos ocupa nada.
+// Generados desde libphonenumber-js y countries-and-timezones; ninguna de las
+// dos librerías se carga en la app.
+const CC_RAW = '247:AC,376:AD,971:AE,93:AF,1:AGAIASBBBMBSCADMDOGDGUJMKNKYLCMPMSPRSXTCTTUSVCVGVI,355:AL,374:AM,244:AO,54:AR,43:AT,61:AUCCCX,297:AW,358:AXFI,994:AZ,387:BA,880:BD,32:BE,226:BF,359:BG,973:BH,257:BI,229:BJ,590:BLGPMF,673:BN,591:BO,599:BQCW,55:BR,975:BT,267:BW,375:BY,501:BZ,243:CD,236:CF,242:CG,41:CH,225:CI,682:CK,56:CL,237:CM,86:CN,57:CO,506:CR,53:CU,238:CV,357:CY,420:CZ,49:DE,253:DJ,45:DK,213:DZ,593:EC,372:EE,20:EG,212:EHMA,291:ER,34:ES,251:ET,679:FJ,500:FK,691:FM,298:FO,33:FR,241:GA,44:GBGGIMJE,995:GE,594:GF,233:GH,350:GI,299:GL,220:GM,224:GN,240:GQ,30:GR,502:GT,245:GW,592:GY,852:HK,504:HN,385:HR,509:HT,36:HU,62:ID,353:IE,972:IL,91:IN,246:IO,964:IQ,98:IR,354:IS,39:ITVA,962:JO,81:JP,254:KE,996:KG,855:KH,686:KI,269:KM,850:KP,82:KR,965:KW,7:KZRU,856:LA,961:LB,423:LI,94:LK,231:LR,266:LS,370:LT,352:LU,371:LV,218:LY,377:MC,373:MD,382:ME,261:MG,692:MH,389:MK,223:ML,95:MM,976:MN,853:MO,596:MQ,222:MR,356:MT,230:MU,960:MV,265:MW,52:MX,60:MY,258:MZ,264:NA,687:NC,227:NE,672:NF,234:NG,505:NI,31:NL,47:NOSJ,977:NP,674:NR,683:NU,64:NZ,968:OM,507:PA,51:PE,689:PF,675:PG,63:PH,92:PK,48:PL,508:PM,970:PS,351:PT,680:PW,595:PY,974:QA,262:REYT,40:RO,381:RS,250:RW,966:SA,677:SB,248:SC,249:SD,46:SE,65:SG,290:SHTA,386:SI,421:SK,232:SL,378:SM,221:SN,252:SO,597:SR,211:SS,239:ST,503:SV,963:SY,268:SZ,235:TD,228:TG,66:TH,992:TJ,690:TK,670:TL,993:TM,216:TN,676:TO,90:TR,688:TV,886:TW,255:TZ,380:UA,256:UG,598:UY,998:UZ,58:VE,84:VN,678:VU,681:WF,685:WS,383:XK,967:YE,27:ZA,260:ZM,263:ZW';
+const TZ_RAW = 'CI:Abidjan,DZ:Algiers,GW:Bissau,EG:Cairo,MA:Casablanca,ES:Ceuta|Canary|Madrid,EH:El_Aaiun,ZA:Johannesburg,SS:Juba,SD:Khartoum,NG:Lagos,MZ:Maputo,LR:Monrovia,KE:Nairobi,TD:Ndjamena,ST:Sao_Tome,LY:Tripoli,TN:Tunis,NA:Windhoek,US:Adak|Anchorage|Boise|Chicago|Denver|Detroit|Indiana/Indianapolis|Indiana/Knox|Indiana/Marengo|Indiana/Petersburg|Indiana/Tell_City|Indiana/Vevay|Indiana/Vincennes|Indiana/Winamac|Juneau|Kentucky/Louisville|Kentucky/Monticello|Los_Angeles|Menominee|Metlakatla|New_York|Nome|North_Dakota/Beulah|North_Dakota/Center|North_Dakota/New_Salem|Phoenix|Sitka|Yakutat|Honolulu,BR:Araguaina|Bahia|Belem|Boa_Vista|Campo_Grande|Cuiaba|Eirunepe|Fortaleza|Maceio|Manaus|Noronha|Porto_Velho|Recife|Rio_Branco|Santarem|Sao_Paulo,AR:Argentina/Buenos_Aires|Argentina/Catamarca|Argentina/Cordoba|Argentina/Jujuy|Argentina/La_Rioja|Argentina/Mendoza|Argentina/Rio_Gallegos|Argentina/Salta|Argentina/San_Juan|Argentina/San_Luis|Argentina/Tucuman|Argentina/Ushuaia,PY:Asuncion,MX:Bahia_Banderas|Cancun|Chihuahua|Ciudad_Juarez|Hermosillo|Matamoros|Mazatlan|Merida|Mexico_City|Monterrey|Ojinaga|Tijuana,BB:Barbados,BZ:Belize,CO:Bogota,CA:Cambridge_Bay|Dawson|Dawson_Creek|Edmonton|Fort_Nelson|Glace_Bay|Goose_Bay|Halifax|Inuvik|Iqaluit|Moncton|Rankin_Inlet|Regina|Resolute|St_Johns|Swift_Current|Toronto|Vancouver|Whitehorse|Winnipeg,VE:Caracas,GF:Cayenne,CR:Costa_Rica,CL:Coyhaique|Punta_Arenas|Santiago|Easter,GL:Danmarkshavn|Nuuk|Scoresbysund|Thule,SV:El_Salvador,TC:Grand_Turk,GT:Guatemala,EC:Guayaquil|Galapagos,GY:Guyana,CU:Havana,JM:Jamaica,BO:La_Paz,PE:Lima,NI:Managua,MQ:Martinique,PM:Miquelon,UY:Montevideo,PA:Panama,SR:Paramaribo,HT:Port-au-Prince,PR:Puerto_Rico,DO:Santo_Domingo,HN:Tegucigalpa,AQ:Casey|Davis|Mawson|Palmer|Rothera|Troll|Vostok,AU:Macquarie|Adelaide|Brisbane|Broken_Hill|Darwin|Eucla|Hobart|Lindeman|Lord_Howe|Melbourne|Perth|Sydney,KZ:Almaty|Aqtau|Aqtobe|Atyrau|Oral|Qostanay|Qyzylorda,JO:Amman,RU:Anadyr|Barnaul|Chita|Irkutsk|Kamchatka|Khandyga|Krasnoyarsk|Magadan|Novokuznetsk|Novosibirsk|Omsk|Sakhalin|Srednekolymsk|Tomsk|Ust-Nera|Vladivostok|Yakutsk|Yekaterinburg|Astrakhan|Kaliningrad|Kirov|Moscow|Samara|Saratov|Simferopol|Ulyanovsk|Volgograd,TM:Ashgabat,IQ:Baghdad,AZ:Baku,TH:Bangkok,LB:Beirut,KG:Bishkek,LK:Colombo,SY:Damascus,BD:Dhaka,TL:Dili,AE:Dubai,TJ:Dushanbe,CY:Famagusta|Nicosia,PS:Gaza|Hebron,VN:Ho_Chi_Minh,HK:Hong_Kong,MN:Hovd|Ulaanbaatar,ID:Jakarta|Jayapura|Makassar|Pontianak,IL:Jerusalem,AF:Kabul,PK:Karachi,NP:Kathmandu,IN:Kolkata,MY:Kuching,MO:Macau,PH:Manila,KP:Pyongyang,QA:Qatar,SA:Riyadh,UZ:Samarkand|Tashkent,KR:Seoul,CN:Shanghai|Urumqi,SG:Singapore,TW:Taipei,GE:Tbilisi,IR:Tehran,BT:Thimphu,JP:Tokyo,MM:Yangon,AM:Yerevan,PT:Azores|Madeira|Lisbon,BM:Bermuda,CV:Cape_Verde,FO:Faroe,GS:South_Georgia,FK:Stanley,AD:Andorra,GR:Athens,RS:Belgrade,DE:Berlin,BE:Brussels,RO:Bucharest,HU:Budapest,MD:Chisinau,IE:Dublin,GI:Gibraltar,FI:Helsinki,TR:Istanbul,UA:Kyiv,GB:London,MT:Malta,BY:Minsk,FR:Paris,CZ:Prague,LV:Riga,IT:Rome,BG:Sofia,EE:Tallinn,AL:Tirane,AT:Vienna,LT:Vilnius,PL:Warsaw,CH:Zurich,IO:Chagos,MV:Maldives,MU:Mauritius,WS:Apia,NZ:Auckland|Chatham,PG:Bougainville|Port_Moresby,VU:Efate,TK:Fakaofo,FJ:Fiji,PF:Gambier|Marquesas|Tahiti,SB:Guadalcanal,GU:Guam,KI:Kanton|Kiritimati|Tarawa,FM:Kosrae,MH:Kwajalein,NR:Nauru,NU:Niue,NF:Norfolk,NC:Noumea,AS:Pago_Pago,PW:Palau,PN:Pitcairn,CK:Rarotonga,TO:Tongatapu';
+
+const ccByIso = new Map();   // 'GT' → '502'
+const isoByTz = new Map();   // 'Guatemala' → 'GT'  (la ciudad basta: es única)
+for (const par of CC_RAW.split(',')) {
+  const [cc, isos] = par.split(':');
+  for (let i = 0; i < isos.length; i += 2) ccByIso.set(isos.slice(i, i + 2), cc);
+}
+for (const par of TZ_RAW.split(',')) {
+  const [iso, ciudades] = par.split(':');
+  for (const c of ciudades.split('|')) isoByTz.set(c, iso);
+}
+
+// País probable, sin consultar a nadie: primero lo que el usuario eligió antes,
+// luego la zona horaria del dispositivo y por último el idioma del navegador.
+function detectIso() {
+  const guardado = localStorage.getItem('sd_cc');
+  if (guardado && ccByIso.has(guardado)) return guardado;
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    const iso = isoByTz.get(tz.split('/').slice(1).join('/'));
+    if (iso && ccByIso.has(iso)) return iso;
+  } catch {}
+  try {
+    const r = new Intl.Locale(navigator.language || 'es').maximize().region;
+    if (r && ccByIso.has(r)) return r;
+  } catch {}
+  return 'GT';   // donde vive el servidor
+}
+
+// ── Combobox de código de país ──
+// Un <select> con 245 países obliga a recorrer la lista entera; esto filtra por
+// nombre, código ISO o prefijo. Sin banderas: no se pintan igual en todos los
+// sistemas y el prefijo es el dato que de verdad importa.
+const ccNorm = s => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+let ccItems = [];      // [{iso, cc, nombre, norm}]
+let ccIso = null;      // país elegido
+let ccVisibles = [];   // resultados del filtro actual
+let ccActivo = -1;     // índice resaltado dentro de ccVisibles
+
+function ccBuild() {
+  let dn = null;
+  try { dn = new Intl.DisplayNames([navigator.language || 'es'], {type: 'region'}); } catch {}
+  ccItems = [...ccByIso].map(([iso, cc]) => {
+    let nombre = iso;
+    try { nombre = (dn && dn.of(iso)) || iso; } catch {}
+    return { iso, cc, nombre, norm: ccNorm(nombre) };
+  }).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+}
+
+// Ordena por lo específico que sea el acierto: primero coincidencias exactas de
+// prefijo o ISO, luego los nombres que empiezan por el texto, luego el resto.
+function ccFiltrar(q) {
+  const t = ccNorm(q).replace(/^\+/, '').trim();
+  if (!t) return ccItems;
+  const esNumero = /^[0-9]+$/.test(t);
+  const out = [];
+  for (const it of ccItems) {
+    let r = -1;
+    if (esNumero) {
+      if (it.cc === t) r = 0;
+      else if (it.cc.startsWith(t)) r = 1;
+    } else {
+      const iso = it.iso.toLowerCase();
+      if (iso === t) r = 0;
+      else if (it.norm.startsWith(t)) r = 1;
+      else if (iso.startsWith(t)) r = 2;
+      else if (it.norm.includes(' ' + t)) r = 3;
+      else if (it.norm.includes(t)) r = 4;
+    }
+    if (r >= 0) out.push({ it, r });
+  }
+  out.sort((a, b) => a.r - b.r || a.it.nombre.localeCompare(b.it.nombre, 'es'));
+  return out.map(o => o.it);
+}
+
+function ccResalta(nombre, q) {
+  const t = ccNorm(q).trim();
+  if (!t) return esc(nombre);
+  const i = ccNorm(nombre).indexOf(t);
+  if (i < 0) return esc(nombre);
+  return esc(nombre.slice(0, i)) + '<mark>' + esc(nombre.slice(i, i + t.length)) + '</mark>' + esc(nombre.slice(i + t.length));
+}
+
+function ccRender(q) {
+  const lista = document.getElementById('ccList');
+  ccVisibles = ccFiltrar(q);
+  if (!ccVisibles.length) {
+    lista.innerHTML = '<li class="cc-empty">Sin resultados</li>';
+    ccActivo = -1;
+    return;
+  }
+  ccActivo = Math.max(0, ccVisibles.findIndex(i => i.iso === ccIso));
+  lista.innerHTML = ccVisibles.map((i, n) =>
+    `<li class="cc-opt" role="option" id="cc-o${n}" data-iso="${i.iso}" aria-selected="${n === ccActivo}">`
+    + `<span class="cc-opt-name">${ccResalta(i.nombre, q)}</span><span class="cc-opt-cc">+${i.cc}</span></li>`
+  ).join('');
+  ccScrollActivo();
+}
+
+function ccScrollActivo() {
+  const lista = document.getElementById('ccList');
+  const el = lista.children[ccActivo];
+  if (!el || !el.scrollIntoView) return;
+  const lt = lista.scrollTop, lb = lt + lista.clientHeight;
+  if (el.offsetTop < lt) lista.scrollTop = el.offsetTop;
+  else if (el.offsetTop + el.offsetHeight > lb) lista.scrollTop = el.offsetTop + el.offsetHeight - lista.clientHeight;
+}
+
+function ccMarcar(n) {
+  const lista = document.getElementById('ccList');
+  if (!ccVisibles.length) return;
+  ccActivo = (n + ccVisibles.length) % ccVisibles.length;
+  for (let k = 0; k < lista.children.length; k++) {
+    lista.children[k].setAttribute('aria-selected', k === ccActivo);
+  }
+  document.getElementById('loginCC').setAttribute('aria-activedescendant', 'cc-o' + ccActivo);
+  ccScrollActivo();
+}
+
+function ccAbrir() {
+  const inp = document.getElementById('loginCC');
+  ccRender(inp.dataset.q || '');
+  document.getElementById('ccList').classList.add('open');
+  inp.setAttribute('aria-expanded', 'true');
+}
+
+function ccCerrar() {
+  const inp = document.getElementById('loginCC');
+  document.getElementById('ccList').classList.remove('open');
+  inp.setAttribute('aria-expanded', 'false');
+  inp.removeAttribute('aria-activedescendant');
+  inp.dataset.q = '';
+  ccSet(ccIso);   // el campo vuelve a mostrar el prefijo, no lo tecleado
+}
+
+// Fija el país y deja el campo mostrando solo su prefijo.
+function ccSet(iso) {
+  if (!iso || !ccByIso.has(iso)) return;
+  ccIso = iso;
+  localStorage.setItem('sd_cc', iso);
+  const inp = document.getElementById('loginCC');
+  if (inp) inp.value = '+' + ccByIso.get(iso);
+}
+
+function ccElegir(iso) {
+  ccSet(iso);
+  ccCerrar();
+  document.getElementById('loginPhone').focus();
+}
+
+function fillCCSelect() {
+  const inp = document.getElementById('loginCC');
+  const lista = document.getElementById('ccList');
+  if (!inp || ccItems.length) return;
+  ccBuild();
+  ccSet(detectIso());
+
+  inp.addEventListener('focus', () => { inp.dataset.q = ''; inp.select(); ccAbrir(); });
+  inp.addEventListener('input', () => {
+    inp.dataset.q = inp.value;
+    ccRender(inp.value);
+    document.getElementById('ccList').classList.add('open');
+    inp.setAttribute('aria-expanded', 'true');
+  });
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); ccAbrir(); ccMarcar(ccActivo + 1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); ccMarcar(ccActivo - 1); }
+    else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (ccVisibles[ccActivo]) ccElegir(ccVisibles[ccActivo].iso);
+      else ccCerrar();
+    }
+    else if (e.key === 'Escape') { e.preventDefault(); ccCerrar(); }
+    else if (e.key === 'Tab') ccCerrar();
+  });
+  // mousedown, no click: el blur del input se dispararía antes que el click.
+  lista.addEventListener('mousedown', e => {
+    const li = e.target.closest('.cc-opt');
+    if (!li) return;
+    e.preventDefault();
+    ccElegir(li.dataset.iso);
+  });
+  inp.addEventListener('blur', () => setTimeout(ccCerrar, 0));
+}
+
+// El backend compara contra users.phone, que está en E.164 estricto: '+' y
+// dígitos, sin espacios ni ceros de marcación nacional.
+function phoneE164() {
+  const raw = (document.getElementById('loginPhone').value || '').trim();
+  const digitos = raw.replace(/\D/g, '');
+  if (!digitos) return '';
+  // Si escriben el número completo con '+', se respeta tal cual.
+  if (raw.startsWith('+')) return '+' + digitos;
+  const cc = ccByIso.get(ccIso) || '';
+  return '+' + cc + digitos.replace(/^0+/, '');
+}
+
+// Reparte un E.164 guardado entre el código de país y el campo de número.
+function setPhoneFields(e164) {
+  const d = (e164 || '').replace(/\D/g, '');
+  if (!d) return;
+  const actual = ccByIso.get(ccIso);
+  // Si el prefijo coincide con el país ya elegido, se respeta: evita que un +1
+  // compartido por muchos países cambie la selección sin motivo.
+  if (actual && d.startsWith(actual)) {
+    document.getElementById('loginPhone').value = d.slice(actual.length);
+    return;
+  }
+  for (let len = 3; len >= 1; len--) {
+    const cc = d.slice(0, len);
+    for (const [iso, c] of ccByIso) {
+      if (c !== cc) continue;
+      ccSet(iso);
+      document.getElementById('loginPhone').value = d.slice(len);
+      return;
+    }
+  }
+  document.getElementById('loginPhone').value = d;
+}
+
 function getToken() { return localStorage.getItem('sd_token') || ''; }
 function setToken(t) { localStorage.setItem('sd_token', t); }
 function clearToken() { localStorage.removeItem('sd_token'); localStorage.removeItem('sd_phone'); }
@@ -1826,8 +2117,8 @@ function loginErr(msg) {
 }
 
 async function doLogin() {
-  const phone = document.getElementById('loginPhone').value.trim();
-  if (!phone) { loginErr('Ingresa un teléfono'); return; }
+  const phone = phoneE164();
+  if (!phone) { loginErr('Ingresa un teléfono'); return; }   // ccSet ya guardó el país
   const btn = document.getElementById('loginSendBtn');
   btn.disabled = true; btn.textContent = 'Enviando...';
   document.getElementById('loginErr').classList.remove('show');
@@ -3135,6 +3426,12 @@ async function initAuth() {
   }
   showUnlock();
 }
+// El selector se puebla antes de initAuth() para que el login nunca llegue a
+// pintarse con el desplegable vacío.
+fillCCSelect();
+const savedPhone = localStorage.getItem('sd_phone');
+if (savedPhone) setPhoneFields(savedPhone);
+
 initAuth();
 
 document.getElementById('loginPhone').addEventListener('keydown', e => { if (e.key==='Enter') doLogin(); });
@@ -3144,8 +3441,6 @@ document.getElementById('loginCode').addEventListener('input', e => {
   e.target.value = e.target.value.replace(/\D/g,'').slice(0,6);
   if (e.target.value.length === 6) doVerify();
 });
-const savedPhone = localStorage.getItem('sd_phone');
-if (savedPhone) document.getElementById('loginPhone').value = savedPhone;
 </script>
 </body>
 </html>
