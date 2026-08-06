@@ -20,7 +20,7 @@ El frontend se sirve vía `go:embed static/*`: **cualquier cambio en `static/ind
 
 Las redes `databases_default` y `web-network` de `docker-compose.yml` son externas y deben existir previamente.
 
-`API.md` documenta el contrato completo para clientes externos (REST, protocolo WebSocket y los parámetros exactos del E2EE). Manténlo sincronizado al tocar handlers, tipos de evento o el esquema de cifrado.
+`API2.md` documenta el contrato **vigente** para clientes externos (REST, protocolo WebSocket, parámetros exactos del E2EE y blurhash). Manténlo sincronizado al tocar handlers, tipos de evento o el esquema de cifrado. `API.md` es la v1 congelada: no la edites, describe el servidor anterior a la paginación y a los adjuntos bajo demanda.
 
 ## Arquitectura
 

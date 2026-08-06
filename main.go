@@ -83,6 +83,7 @@ type Message struct {
 	FileName  string    `json:"file_name,omitempty"`
 	FileSize  int64     `json:"file_size,omitempty"`
 	FileData  string    `json:"file_data,omitempty"`
+	Blurhash  string    `json:"blurhash,omitempty"` // cifrado, como el resto del contenido
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -125,6 +126,7 @@ func main() {
 	http.HandleFunc("/api/channels", authMW(handleChannels))
 	http.HandleFunc("/api/channels/", authMW(handleChannelAction))
 	http.HandleFunc("/api/messages", authMW(handleMessages))
+	http.HandleFunc("/api/files/", authMW(handleFile))
 	http.HandleFunc("/api/messages/delete", authMW(handleDeleteMessages))
 	http.HandleFunc("/api/messages/delete/", authMW(handleDeleteSingleMessage))
 	staticFS, err := fs.Sub(staticFiles, "static")
@@ -215,7 +217,12 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				log.Println("Error guardando mensaje:", err)
 				continue
 			}
-			broadcast(WSEvent{Type: "new_message", Message: saved})
+			// Se retransmiten solo los metadatos: reenviar el adjunto entero a
+			// cada cliente conectado es justo lo que hacía lenta la app. Quien
+			// lo necesite lo pide a /api/files/{id}.
+			meta := *saved
+			meta.FileData = ""
+			broadcast(WSEvent{Type: "new_message", Message: &meta})
 
 		case "delete_messages":
 			if event.Period != "" {
@@ -356,16 +363,29 @@ func handleMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	limit := 200
+	limit := 50
 	if l := r.URL.Query().Get("limit"); l != "" {
-		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 500 {
+		if n, err := strconv.Atoi(l); err == nil && n > 0 && n <= 200 {
 			limit = n
 		}
 	}
 
+	// before = id del mensaje más antiguo ya cargado por el cliente.
+	// Ausente o 0 → primera página, es decir los mensajes más recientes.
+	before := 0
+	if b := r.URL.Query().Get("before"); b != "" {
+		if n, err := strconv.Atoi(b); err == nil && n > 0 {
+			before = n
+		}
+	}
+
+	// file_data queda fuera a propósito: se sirve aparte en /api/files/{id}.
+	// Pedimos un registro de más para saber si quedan páginas anteriores.
 	rows, err := db.Query(`
-		SELECT id, channel_id, username, content, has_file, COALESCE(file_name,''), COALESCE(file_size,0), COALESCE(file_data,''), created_at
-		FROM messages WHERE channel_id = $1 ORDER BY created_at ASC LIMIT $2`, channelID, limit)
+		SELECT id, channel_id, username, content, has_file, COALESCE(file_name,''), COALESCE(file_size,0), COALESCE(blurhash,''), created_at
+		FROM messages
+		WHERE channel_id = $1 AND ($2 = 0 OR id < $2)
+		ORDER BY id DESC LIMIT $3`, channelID, before, limit+1)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -375,17 +395,64 @@ func handleMessages(w http.ResponseWriter, r *http.Request) {
 	messages := []Message{}
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.ID, &m.ChannelID, &m.Username, &m.Content, &m.HasFile, &m.FileName, &m.FileSize, &m.FileData, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.ChannelID, &m.Username, &m.Content, &m.HasFile, &m.FileName, &m.FileSize, &m.Blurhash, &m.CreatedAt); err != nil {
 			continue
 		}
 		messages = append(messages, m)
+	}
+
+	hasMore := len(messages) > limit
+	if hasMore {
+		messages = messages[:limit]
+	}
+
+	// La consulta viene descendente (más recientes primero); el cliente los
+	// pinta en orden cronológico, así que se invierte aquí.
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
 	}
 
 	var total int
 	db.QueryRow("SELECT COUNT(*) FROM messages WHERE channel_id = $1", channelID).Scan(&total)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"messages": messages, "total": total})
+	json.NewEncoder(w).Encode(map[string]any{"messages": messages, "total": total, "has_more": hasMore})
+}
+
+// handleFile sirve el adjunto cifrado de un mensaje. Se separa de /api/messages
+// para que el historial cargue sin arrastrar megabytes de base64 por mensaje.
+func handleFile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		http.Error(w, "Method not allowed", 405)
+		return
+	}
+
+	idStr := r.URL.Path[len("/api/files/"):]
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id <= 0 {
+		http.Error(w, "Invalid ID", 400)
+		return
+	}
+
+	var fileName, fileData string
+	err = db.QueryRow(`
+		SELECT COALESCE(file_name,''), COALESCE(file_data,'')
+		FROM messages WHERE id = $1`, id).Scan(&fileName, &fileData)
+	if err == sql.ErrNoRows {
+		http.Error(w, "No encontrado", 404)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	if fileData == "" {
+		http.Error(w, "El mensaje no tiene adjunto", 404)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"id": id, "file_name": fileName, "file_data": fileData})
 }
 
 func handleDeleteMessages(w http.ResponseWriter, r *http.Request) {
@@ -451,11 +518,11 @@ func handleDeleteSingleMessage(w http.ResponseWriter, r *http.Request) {
 func saveMessage(msg *Message) (*Message, error) {
 	var saved Message
 	err := db.QueryRow(`
-		INSERT INTO messages (channel_id, username, content, has_file, file_name, file_size, file_data)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id, channel_id, username, content, has_file, COALESCE(file_name,''), COALESCE(file_size,0), COALESCE(file_data,''), created_at`,
-		msg.ChannelID, msg.Username, msg.Content, msg.HasFile, msg.FileName, msg.FileSize, msg.FileData,
-	).Scan(&saved.ID, &saved.ChannelID, &saved.Username, &saved.Content, &saved.HasFile, &saved.FileName, &saved.FileSize, &saved.FileData, &saved.CreatedAt)
+		INSERT INTO messages (channel_id, username, content, has_file, file_name, file_size, file_data, blurhash)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING id, channel_id, username, content, has_file, COALESCE(file_name,''), COALESCE(file_size,0), COALESCE(file_data,''), COALESCE(blurhash,''), created_at`,
+		msg.ChannelID, msg.Username, msg.Content, msg.HasFile, msg.FileName, msg.FileSize, msg.FileData, msg.Blurhash,
+	).Scan(&saved.ID, &saved.ChannelID, &saved.Username, &saved.Content, &saved.HasFile, &saved.FileName, &saved.FileSize, &saved.FileData, &saved.Blurhash, &saved.CreatedAt)
 	return &saved, err
 }
 
@@ -510,6 +577,12 @@ func migrate() error {
 		if _, err := db.Exec(s); err != nil {
 			return err
 		}
+	}
+
+	// messages no se crea aquí (debe preexistir), así que la columna del
+	// blurhash se añade aparte y sin abortar el arranque si falla.
+	if _, err := db.Exec(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS blurhash TEXT`); err != nil {
+		log.Println("Aviso: no se pudo añadir la columna blurhash:", err)
 	}
 	var n int
 	db.QueryRow("SELECT COUNT(*) FROM users").Scan(&n)

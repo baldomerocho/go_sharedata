@@ -658,6 +658,11 @@ button, input, textarea { font-family: inherit; }
   min-width: 240px;
 }
 .msg-attach:hover { border-color: var(--border2); }
+/* Adjunto aún no descargado: se atenúa el icono suelto para que se lea como
+   marcador de posición. Con blurhash no se atenúa: el fondo debe verse con su
+   color real, y es además lo que asume el cálculo de contraste de la tinta. */
+.msg-attach.lazy .att-thumb:not(.bh) { opacity: 0.55; }
+.msg-attach.lazy[data-loading="1"] { border-color: var(--gold-dim2); }
 .msg-attach-sz { color: var(--text3); font-variant-numeric: tabular-nums; flex-shrink: 0; font-size: 11px; }
 
 .att-thumb {
@@ -681,6 +686,25 @@ button, input, textarea { font-family: inherit; }
 }
 .att-thumb.pdf-thumb { background: #fff; }
 [data-theme="light"] .att-thumb.pdf-thumb { background: #fff; }
+
+/* Blurhash de fondo: da una pista del contenido sin descargarlo. Se muestra a
+   plena intensidad; la legibilidad se resuelve eligiendo en JS la tinta que más
+   contrasta con esa imagen, más un halo que la despega del fondo. */
+.att-thumb.bh { position: relative; }
+.att-thumb.bh::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: var(--bh);
+  background-size: cover;
+  background-position: center;
+}
+.att-thumb.bh > svg {
+  position: relative;
+  z-index: 1;
+  color: var(--bh-ink);
+  filter: drop-shadow(0 1px 1.5px var(--bh-halo));
+}
 
 .att-info {
   flex: 1;
@@ -780,6 +804,53 @@ button, input, textarea { font-family: inherit; }
 }
 .file-preview.active { display: flex; }
 .file-preview img { max-height: 44px; border-radius: 4px; }
+
+/* Lista de adjuntos en cola */
+.fp-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  max-height: 118px;
+  overflow-y: auto;
+}
+.fp-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  padding: 4px 4px 4px 8px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+}
+.fp-chip img { max-height: 26px; max-width: 34px; object-fit: cover; border-radius: 3px; }
+.fp-chip-name {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.fp-chip-sz { color: var(--text3); font-size: 11px; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.fp-chip-x {
+  flex-shrink: 0;
+  width: 19px;
+  height: 19px;
+  border: none;
+  background: none;
+  color: var(--text3);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.fp-chip-x:hover { color: var(--red); background: var(--red-dim); }
 .file-preview .fp-remove {
   margin-left: auto;
   cursor: pointer;
@@ -866,6 +937,58 @@ button, input, textarea { font-family: inherit; }
 }
 .send-btn:hover { background: var(--gold2); transform: translateY(-1px); box-shadow: 0 4px 10px var(--gold-glow); }
 .send-btn:active { transform: translateY(0); }
+
+/* ============ INDICADOR DE CARGA ============ */
+.load-bar {
+  position: absolute;
+  top: var(--header-h);
+  left: 0;
+  right: 0;
+  height: 2px;
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity var(--t-fast);
+  pointer-events: none;
+  z-index: 20;
+}
+.load-bar.active { opacity: 1; }
+.load-bar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, var(--gold), transparent);
+  transform: translateX(-100%);
+  animation: loadSlide 1.1s cubic-bezier(.4,0,.2,1) infinite;
+}
+@keyframes loadSlide { to { transform: translateX(100%); } }
+
+.load-chip {
+  position: absolute;
+  top: calc(var(--header-h) + 12px);
+  left: 50%;
+  transform: translate(-50%, -8px);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 13px;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 999px;
+  box-shadow: var(--shadow-md);
+  color: var(--text2);
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--t-base), transform var(--t-base);
+  z-index: 21;
+}
+.load-chip.show { opacity: 1; transform: translate(-50%, 0); }
+
+@media (prefers-reduced-motion: reduce) {
+  .load-bar::after { animation-duration: 2.4s; }
+  .load-chip { transition: opacity var(--t-base); }
+}
 
 /* ============ OVERLAYS ============ */
 .drop-zone {
@@ -1449,6 +1572,9 @@ button, input, textarea { font-family: inherit; }
     </div>
   </div>
 
+  <div class="load-bar" id="loadBar"></div>
+  <div class="load-chip" id="loadChip"><span class="spin sm"></span><span id="loadChipTxt">Cargando…</span></div>
+
   <div class="messages" id="msgBox">
     <div class="empty" id="emptyState">
       <div class="empty-icon">
@@ -1466,9 +1592,8 @@ button, input, textarea { font-family: inherit; }
 
   <div class="input-bar">
     <div class="file-preview" id="filePrev">
-      <span id="fpName"></span>
-      <span id="fpSize"></span>
-      <button class="fp-remove" onclick="rmFile()">&times;</button>
+      <div class="fp-list" id="fpList"></div>
+      <button class="fp-remove" onclick="clearFiles()" title="Quitar todos">&times;</button>
     </div>
     <div class="input-row">
       <div class="input-wrap">
@@ -1481,11 +1606,11 @@ button, input, textarea { font-family: inherit; }
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
       </button>
     </div>
-    <input type="file" id="fileIn" style="display:none" onchange="onFile(this)">
+    <input type="file" id="fileIn" multiple style="display:none" onchange="onFile(this)">
   </div>
 </div>
 
-<div class="drop-zone" id="dropZone"><span>Soltar archivo</span></div>
+<div class="drop-zone" id="dropZone"><span>Soltar archivos</span></div>
 
 <div class="overlay" id="cleanModal">
   <div class="modal">
@@ -1569,7 +1694,7 @@ button, input, textarea { font-family: inherit; }
 </div>
 
 <script>
-let ws, chId = +localStorage.getItem('sd_ch') || 1, chs = [], period = null, pFile = null, renId = null;
+let ws, chId = +localStorage.getItem('sd_ch') || 1, chs = [], period = null, pFiles = [], renId = null;
 
 // ── Theme ──
 function setTheme(mode) {
@@ -1800,7 +1925,7 @@ function conn() {
     else if (ev.type === 'messages_deleted' && ev.channel_id === chId) { loadMsgs(); toast('Mensajes eliminados'); }
     else if (ev.type === 'message_removed' && ev.message.channel_id === chId) {
       const el = document.querySelector(`.msg[data-id="${ev.message.id}"]`);
-      if (el) { el.remove(); msgCache.delete(ev.message.id); regroupMsgs(); chkEmpty(); }
+      if (el) { el.remove(); msgCache.delete(ev.message.id); fileCache.delete(ev.message.id); regroupMsgs(); chkEmpty(); }
     }
     else if (ev.type === 'channel_created' || ev.type === 'channel_updated') loadChs();
     else if (ev.type === 'channel_deleted') {
@@ -1981,16 +2106,354 @@ function renderThumbs(m, root) {
   } catch(e) { /* never block addMsg */ }
 }
 
+// El tipo se deduce de la extensión: debe funcionar antes de descargar el
+// contenido, que ahora llega bajo demanda desde /api/files/{id}.
 function fileKind(m) {
   if (!m.has_file) return null;
   const ext = (m.file_name||'').split('.').pop().toLowerCase();
   const data = m.file_data || '';
-  if (data.startsWith('data:image/')) return 'image';
+  if (data.startsWith('data:image/') || ['jpg','jpeg','png','gif','webp','bmp','svg','avif','heic','heif','ico'].includes(ext)) return 'image';
   if (data.startsWith('data:audio/') || ['mp3','wav','ogg','m4a','aac','flac','opus'].includes(ext)) return 'audio';
   if (data.startsWith('data:video/') || ['mp4','mov','webm','mkv','avi'].includes(ext)) return 'video';
   if (ext === 'pdf' || data.startsWith('data:application/pdf')) return 'pdf';
   if (['doc','docx','xls','xlsx','ppt','pptx','odt','ods','rtf','txt','csv','md','json','xml','html'].includes(ext)) return 'doc';
   return 'file';
+}
+
+// ── Blurhash ──
+// Implementación compacta del formato de Dag Ågren. Se genera en el navegador
+// (el servidor no puede: no tiene la clave) y se guarda cifrado como un campo
+// más del mensaje, así la tarjeta insinúa el contenido sin descargarlo.
+const BH83 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#$%*+,-.:;=?@[]^_{|}~";
+
+function bh83enc(value, length) {
+  let out = '';
+  for (let i = 1; i <= length; i++) out += BH83[Math.floor(value / Math.pow(83, length - i)) % 83];
+  return out;
+}
+function bh83dec(str) {
+  let v = 0;
+  for (const c of str) v = v * 83 + BH83.indexOf(c);
+  return v;
+}
+const bhLin  = v => { const x = v / 255; return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); };
+// El +0.5 ya redondea: truncar (no Math.round, que redondearía dos veces).
+const bhSrgb = v => { const x = Math.max(0, Math.min(1, v)); return x <= 0.0031308 ? Math.trunc(x * 12.92 * 255 + 0.5) : Math.trunc((1.055 * Math.pow(x, 1/2.4) - 0.055) * 255 + 0.5); };
+const bhPow  = (v, e) => Math.sign(v) * Math.pow(Math.abs(v), e);
+
+function bhEncode(pixels, width, height, cx = 4, cy = 3) {
+  const factors = [];
+  for (let y = 0; y < cy; y++) {
+    for (let x = 0; x < cx; x++) {
+      const norm = (x === 0 && y === 0) ? 1 : 2;
+      let r = 0, g = 0, b = 0;
+      for (let i = 0; i < width; i++) {
+        for (let j = 0; j < height; j++) {
+          const basis = norm * Math.cos(Math.PI * x * i / width) * Math.cos(Math.PI * y * j / height);
+          const p = 4 * i + j * 4 * width;
+          r += basis * bhLin(pixels[p]);
+          g += basis * bhLin(pixels[p + 1]);
+          b += basis * bhLin(pixels[p + 2]);
+        }
+      }
+      const scale = 1 / (width * height);
+      factors.push([r * scale, g * scale, b * scale]);
+    }
+  }
+  const dc = factors[0], ac = factors.slice(1);
+  let hash = bh83enc((cx - 1) + (cy - 1) * 9, 1);
+  let maxVal = 1;
+  if (ac.length) {
+    // Sin Math.abs, a propósito: la implementación de referencia toma el máximo
+    // con signo y eso es lo que define el formato. Usar el valor absoluto genera
+    // hashes que los decodificadores estándar interpretan con otros colores.
+    const actual = Math.max(...ac.map(f => Math.max(...f)));
+    const q = Math.max(0, Math.min(82, Math.floor(actual * 166 - 0.5)));
+    maxVal = (q + 1) / 166;
+    hash += bh83enc(q, 1);
+  } else {
+    hash += bh83enc(0, 1);
+  }
+  hash += bh83enc((bhSrgb(dc[0]) << 16) + (bhSrgb(dc[1]) << 8) + bhSrgb(dc[2]), 4);
+  const quant = v => Math.max(0, Math.min(18, Math.floor(bhPow(v / maxVal, 0.5) * 9 + 9.5)));
+  for (const f of ac) hash += bh83enc(quant(f[0]) * 361 + quant(f[1]) * 19 + quant(f[2]), 2);
+  return hash;
+}
+
+function bhDecode(hash, width, height, punch = 1) {
+  if (!hash || hash.length < 6) return null;
+  const sizeFlag = bh83dec(hash[0]);
+  const cx = (sizeFlag % 9) + 1, cy = Math.floor(sizeFlag / 9) + 1;
+  if (hash.length !== 4 + 2 * cx * cy) return null;
+  const maxVal = (bh83dec(hash[1]) + 1) / 166;
+  const dcv = bh83dec(hash.substring(2, 6));
+  const colors = [[bhLin((dcv >> 16) & 255), bhLin((dcv >> 8) & 255), bhLin(dcv & 255)]];
+  for (let i = 1; i < cx * cy; i++) {
+    const v = bh83dec(hash.substring(4 + i * 2, 6 + i * 2));
+    const r = Math.floor(v / 361), g = Math.floor(v / 19) % 19, b = v % 19;
+    colors.push([
+      bhPow((r - 9) / 9, 2) * maxVal * punch,
+      bhPow((g - 9) / 9, 2) * maxVal * punch,
+      bhPow((b - 9) / 9, 2) * maxVal * punch,
+    ]);
+  }
+  const px = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      let r = 0, g = 0, b = 0;
+      for (let j = 0; j < cy; j++) {
+        for (let i = 0; i < cx; i++) {
+          const basis = Math.cos(Math.PI * x * i / width) * Math.cos(Math.PI * y * j / height);
+          const c = colors[i + j * cx];
+          r += c[0] * basis; g += c[1] * basis; b += c[2] * basis;
+        }
+      }
+      const p = 4 * (x + y * width);
+      px[p] = bhSrgb(r); px[p+1] = bhSrgb(g); px[p+2] = bhSrgb(b); px[p+3] = 255;
+    }
+  }
+  return px;
+}
+
+// ── Legibilidad del icono sobre el blurhash ──
+// En vez de atenuar el fondo siempre, se mide la luminancia de la zona donde va
+// el icono y se elige la tinta que más contrasta. El velo solo entra cuando el
+// contraste no llega al mínimo, y con la opacidad justa.
+// Con estas dos tintas, elegir siempre la de mayor contraste garantiza un
+// mínimo de 4.37:1 en el peor fondo posible (luminancia 0.19), por encima del
+// 3:1 que pide WCAG 2.2 SC 1.4.11. Por eso no hace falta atenuar el fondo.
+// Si se cambian las tintas hay que rehacer esa cuenta.
+const bhRelLum = (r, g, b) => 0.2126 * bhLin(r) + 0.7152 * bhLin(g) + 0.0722 * bhLin(b);
+const BH_INK_LIGHT = { css: '#ffffff', halo: 'rgba(0,0,0,0.5)',  lum: 1 };
+const BH_INK_DARK  = { css: '#0f0f14', halo: 'rgba(255,255,255,0.55)', lum: bhRelLum(15, 15, 20) };
+const bhContrast = (a, b) => { const [hi, lo] = a > b ? [a, b] : [b, a]; return (hi + 0.05) / (lo + 0.05); };
+
+// Luminancia media del recuadro central: el borde apenas queda bajo el icono.
+function bhCentralLum(px, W, H, frac = 0.55) {
+  const x0 = Math.floor(W * (1 - frac) / 2), x1 = W - x0;
+  const y0 = Math.floor(H * (1 - frac) / 2), y1 = H - y0;
+  let sum = 0, n = 0;
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      const p = 4 * (x + y * W);
+      sum += bhRelLum(px[p], px[p + 1], px[p + 2]);
+      n++;
+    }
+  }
+  return n ? sum / n : 0;
+}
+
+function bhInkFor(lumBg) {
+  const ink = bhContrast(BH_INK_LIGHT.lum, lumBg) >= bhContrast(BH_INK_DARK.lum, lumBg)
+    ? BH_INK_LIGHT : BH_INK_DARK;
+  return { ink: ink.css, halo: ink.halo };
+}
+
+// hash → {url, ink, halo}, memorizado (el mismo adjunto se repinta al paginar).
+const bhStyleCache = new Map();
+function blurhashStyle(hash) {
+  if (!hash) return null;
+  if (bhStyleCache.has(hash)) return bhStyleCache.get(hash);
+  let out = null;
+  try {
+    const W = 32, H = 32;
+    const px = bhDecode(hash, W, H);
+    if (px) {
+      const c = document.createElement('canvas');
+      c.width = W; c.height = H;
+      c.getContext('2d').putImageData(new ImageData(px, W, H), 0, 0);
+      out = { url: c.toDataURL('image/png'), ...bhInkFor(bhCentralLum(px, W, H)) };
+    }
+  } catch { out = null; }
+  bhStyleCache.set(hash, out);
+  return out;
+}
+
+// ── Generación del blurhash según el tipo de archivo ──
+function bhFromDrawable(src, w = 32, h = 32) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(src, 0, 0, w, h);
+  return bhEncode(ctx.getImageData(0, 0, w, h).data, w, h);
+}
+
+function bhLoadImg(src) {
+  return new Promise((res, rej) => {
+    const i = new Image();
+    i.onload = () => res(i);
+    i.onerror = rej;
+    i.src = src;
+  });
+}
+
+function bhFromVideo(dataUrl) {
+  return new Promise(resolve => {
+    const v = document.createElement('video');
+    v.preload = 'metadata'; v.muted = true; v.playsInline = true;
+    let settled = false;
+    const finish = val => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(to);
+      try { v.removeAttribute('src'); v.load(); } catch {}
+      resolve(val);
+    };
+    const to = setTimeout(() => finish(''), 8000);
+    v.onloadeddata = () => { try { v.currentTime = Math.min(1, (v.duration || 1) * 0.1); } catch { finish(''); } };
+    v.onseeked = () => { try { finish(bhFromDrawable(v)); } catch { finish(''); } };
+    v.onerror = () => finish('');
+    v.src = dataUrl;
+  });
+}
+
+// Devuelve '' cuando el archivo no tiene representación visual: es opcional.
+async function makeBlurhash(name, dataUrl) {
+  try {
+    const kind = fileKind({has_file: true, file_name: name, file_data: dataUrl});
+    if (kind === 'image') return bhFromDrawable(await bhLoadImg(dataUrl));
+    if (kind === 'video') return await bhFromVideo(dataUrl);
+    if (kind === 'pdf') {
+      const lib = await ensurePdfJs();
+      const pdf = await lib.getDocument({data: dataUrlToU8(dataUrl)}).promise;
+      const page = await pdf.getPage(1);
+      const vp1 = page.getViewport({scale: 1});
+      const vp = page.getViewport({scale: Math.min(64 / vp1.width, 64 / vp1.height)});
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(vp.width));
+      c.height = Math.max(1, Math.round(vp.height));
+      await page.render({canvasContext: c.getContext('2d'), viewport: vp}).promise;
+      return bhFromDrawable(c);
+    }
+    if (kind === 'audio') {
+      const b64 = (dataUrl.split(',')[1] || '').slice(0, 1400000);
+      if (!b64) return '';
+      const bin = atob(b64);
+      const u8 = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+      const cover = extractID3Cover(u8);
+      return cover ? bhFromDrawable(await bhLoadImg(cover)) : '';
+    }
+  } catch { /* el adjunto se ve igual, solo sin fondo */ }
+  return '';
+}
+
+// ── Adjuntos bajo demanda ──
+// El historial solo trae nombre y peso. El contenido real (data URL cifrado) se
+// descarga al pulsar, se descifra una vez y se guarda aquí por id de mensaje.
+const fileCache = new Map();
+const fileInflight = new Map();
+
+async function ensureFile(m) {
+  if (fileCache.has(m.id)) return fileCache.get(m.id);
+  if (fileInflight.has(m.id)) return fileInflight.get(m.id);
+  const p = (async () => {
+    const r = await api(`/api/files/${m.id}`);
+    if (!r.ok) throw new Error('descarga fallida');
+    const j = await r.json();
+    const data = await decField(j.file_data);
+    if (!data || data === '🔒 cifrado') throw new Error('descifrado fallido');
+    fileCache.set(m.id, data);
+    return data;
+  })();
+  fileInflight.set(m.id, p);
+  p.catch(() => {}).then(() => fileInflight.delete(m.id));
+  return p;
+}
+
+// Devuelve el mensaje con su adjunto ya descargado, para las acciones que lo
+// necesitan sí o sí (abrir, descargar, copiar imagen).
+async function withFile(m) {
+  if (!m.has_file) return m;
+  if (fileCache.has(m.id)) return {...m, file_data: fileCache.get(m.id)};
+  const done = beginTask('Descargando adjunto…');
+  try {
+    return {...m, file_data: await ensureFile(m)};
+  } catch {
+    toast('No se pudo descargar el adjunto');
+    return null;
+  } finally { done(); }
+}
+
+const MUSIC_ICON = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>';
+const PDF_ICON   = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="1.8"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><text x="7" y="18" font-size="6" fill="#dc2626" stroke="none" font-family="sans-serif" font-weight="700">PDF</text></svg>';
+const FILE_ICON  = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+const IMG_ICON   = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
+const VIDEO_ICON = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10 9 15 12 10 15 10 9" fill="currentColor" stroke="none"/></svg>';
+
+// Sobre un blurhash, el icono de PDF usa la tinta calculada en vez de su rojo
+// fijo: el rojo no contrasta con cualquier fondo y la etiqueta ya lo identifica.
+const PDF_ICON_INK = PDF_ICON.replace(/#dc2626/g, 'currentColor');
+
+function kindIcon(kind, adaptive = false) {
+  return kind === 'image' ? IMG_ICON
+       : kind === 'audio' ? MUSIC_ICON
+       : kind === 'video' ? VIDEO_ICON
+       : kind === 'pdf'   ? (adaptive ? PDF_ICON_INK : PDF_ICON)
+       : FILE_ICON;
+}
+
+// Estado inicial de todo adjunto: solo metadatos, sin descargar nada.
+function attachCardHtml(m) {
+  const kind = fileKind(m);
+  const verb = (kind === 'image' || kind === 'video' || kind === 'audio') ? 'Ver' : 'Cargar';
+  const bh = blurhashStyle(m.blurhash);
+  const thumb = bh
+    ? `<div class="att-thumb bh" style="--bh:url('${bh.url}');--bh-ink:${bh.ink};--bh-halo:${bh.halo}">${kindIcon(kind, true)}</div>`
+    : `<div class="att-thumb">${kindIcon(kind)}</div>`;
+  return `<div class="msg-attach lazy" data-mid="${m.id}">`
+    + thumb
+    + `<div class="att-info"><span class="att-name">${esc(m.file_name)}</span><span class="att-sz msg-attach-sz">${fmtSz(m.file_size)}</span></div>`
+    + `<div class="att-actions"><button class="att-btn primary" data-act="load" data-mid="${m.id}">${verb}</button>`
+    + `<button class="att-btn" data-act="dl" data-mid="${m.id}">Descargar</button></div></div>`;
+}
+
+// Estado tras la descarga: el render rico de siempre.
+function attachFullHtml(m) {
+  const kind = fileKind(m);
+  const d = m.file_data;
+  if (kind === 'image') {
+    return `<img class="msg-img" src="${d}" loading="lazy" data-mid="${m.id}">`;
+  }
+  if (kind === 'audio') {
+    return `<div class="msg-audio-wrap" data-mid="${m.id}"><div class="msg-attach audio-preview"><div class="att-thumb audio-cover" data-mid="${m.id}">${MUSIC_ICON}</div><div class="att-info"><span class="att-name">${esc(m.file_name)}</span><span class="att-sz msg-attach-sz">${fmtSz(m.file_size)}</span></div><div class="att-actions"><button class="att-btn primary" data-act="dl" data-mid="${m.id}">Descargar</button></div></div><audio class="msg-audio" controls preload="none" src="${d}"></audio></div>`;
+  }
+  if (kind === 'video') {
+    return `<video class="msg-video" controls preload="metadata" src="${d}"></video>`;
+  }
+  if (kind === 'pdf') {
+    return `<div class="msg-attach" data-mid="${m.id}"><div class="att-thumb pdf-thumb" data-mid="${m.id}">${PDF_ICON}</div><div class="att-info"><span class="att-name">${esc(m.file_name)}</span><span class="att-sz msg-attach-sz">${fmtSz(m.file_size)}</span></div><div class="att-actions"><button class="att-btn primary" data-act="open" data-mid="${m.id}">Abrir</button><button class="att-btn" data-act="dl" data-mid="${m.id}">Descargar</button></div></div>`;
+  }
+  return `<div class="msg-attach" data-mid="${m.id}"><div class="att-thumb">${FILE_ICON}</div><div class="att-info"><span class="att-name">${esc(m.file_name)}</span><span class="att-sz msg-attach-sz">${fmtSz(m.file_size)}</span></div><div class="att-actions"><button class="att-btn" data-act="open" data-mid="${m.id}">Abrir</button><button class="att-btn primary" data-act="dl" data-mid="${m.id}">Descargar</button></div></div>`;
+}
+
+// Sustituye la tarjeta por el contenido real, descargándolo si hace falta.
+async function expandAttach(id) {
+  const card = document.querySelector(`.msg-attach.lazy[data-mid="${id}"]`);
+  const m = msgCache.get(id);
+  if (!card || !m) return;
+  const btn = card.querySelector('[data-act="load"]');
+  if (card.dataset.loading === '1') return;
+  card.dataset.loading = '1';
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin sm"></span>'; }
+
+  const box = document.getElementById('msgBox');
+  const stick = isNearBottom();
+  const done = beginTask('Descargando adjunto…');
+  try {
+    const data = await ensureFile(m);
+    const full = {...m, file_data: data};
+    const holder = document.createElement('div');
+    holder.innerHTML = attachFullHtml(full);
+    const el = holder.firstElementChild;
+    card.replaceWith(el);
+    renderThumbs(full, el);
+    if (stick) scrollEnd();
+  } catch {
+    card.dataset.loading = '';
+    if (btn) { btn.disabled = false; btn.textContent = 'Reintentar'; }
+    toast('No se pudo descargar el adjunto');
+  } finally { done(); }
 }
 
 // data:URL → blob URL para abrir en pestaña
@@ -2007,18 +2470,26 @@ function dataToBlobUrl(dataUrl) {
   } catch { return null; }
 }
 
-function openInTab(m) {
-  const url = dataToBlobUrl(m.file_data);
+async function openInTab(m) {
+  const f = await withFile(m);
+  if (!f) return;
+  const url = dataToBlobUrl(f.file_data);
   if (url) window.open(url, '_blank'); else toast('No se pudo abrir');
 }
-function openHere(m) {
-  if (fileKind(m) === 'image') {
-    document.getElementById('lbImg').src = m.file_data;
+async function openHere(m) {
+  const f = await withFile(m);
+  if (!f) return;
+  if (fileKind(f) === 'image') {
+    document.getElementById('lbImg').src = f.file_data;
     document.getElementById('lb').classList.add('active');
   } else {
-    const url = dataToBlobUrl(m.file_data);
+    const url = dataToBlobUrl(f.file_data);
     if (url) window.open(url, '_self'); else toast('No se pudo abrir');
   }
+}
+async function dlFile(m) {
+  const f = await withFile(m);
+  if (f) dl(f.file_name, f.file_data);
 }
 async function copyLink(m) {
   try { await navigator.clipboard.writeText(m.file_name || ''); toast('Nombre copiado'); }
@@ -2033,24 +2504,28 @@ function buildCtxItems(m) {
 
   if (m.content) items.push({ i: 'copy', l: 'Copiar texto', a: () => cpTxt(m.id) });
 
+  // Con el adjunto aún sin descargar, la primera opción es cargarlo en línea.
+  const notLoaded = m.has_file && !fileCache.has(m.id);
+  if (notLoaded) items.push({ i: 'open', l: 'Cargar adjunto', a: () => expandAttach(m.id) });
+
   if (kind === 'image') {
     items.push({ i: 'image', l: 'Copiar imagen', a: () => cpImg(m.id) });
     items.push({ i: 'expand', l: 'Ver tamaño completo', a: () => openHere(m) });
     items.push({ i: 'external', l: 'Abrir en nueva pestaña', a: () => openInTab(m) });
-    items.push({ i: 'download', l: 'Descargar', a: () => dl(m.file_name, m.file_data) });
+    items.push({ i: 'download', l: 'Descargar', a: () => dlFile(m) });
   } else if (kind === 'audio') {
     items.push({ i: 'play', l: 'Abrir reproductor', a: () => openInTab(m) });
-    items.push({ i: 'download', l: 'Descargar audio', a: () => dl(m.file_name, m.file_data) });
+    items.push({ i: 'download', l: 'Descargar audio', a: () => dlFile(m) });
     items.push({ i: 'copy', l: 'Copiar nombre', a: () => copyLink(m) });
   } else if (kind === 'video') {
     items.push({ i: 'play', l: 'Reproducir en pestaña', a: () => openInTab(m) });
-    items.push({ i: 'download', l: 'Descargar video', a: () => dl(m.file_name, m.file_data) });
+    items.push({ i: 'download', l: 'Descargar video', a: () => dlFile(m) });
   } else if (kind === 'pdf') {
     items.push({ i: 'open', l: 'Abrir PDF', a: () => openInTab(m) });
-    items.push({ i: 'download', l: 'Descargar', a: () => dl(m.file_name, m.file_data) });
+    items.push({ i: 'download', l: 'Descargar', a: () => dlFile(m) });
     items.push({ i: 'copy', l: 'Copiar nombre', a: () => copyLink(m) });
   } else if (kind === 'doc' || kind === 'file') {
-    items.push({ i: 'download', l: 'Descargar', a: () => dl(m.file_name, m.file_data) });
+    items.push({ i: 'download', l: 'Descargar', a: () => dlFile(m) });
     items.push({ i: 'external', l: 'Abrir en nueva pestaña', a: () => openInTab(m) });
     items.push({ i: 'copy', l: 'Copiar nombre', a: () => copyLink(m) });
   }
@@ -2092,17 +2567,81 @@ document.addEventListener('keydown', e => {
 document.getElementById('msgBox').addEventListener('scroll', hideCtxMenu, { passive: true });
 
 // ── Messages ──
-async function loadMsgs() {
-  const data = await (await api(`/api/messages?channel_id=${chId}&limit=500`)).json();
+const PAGE_SIZE = 40;
+let oldestId = null;      // id del mensaje más antiguo pintado
+let hasMoreOlder = false; // ¿quedan páginas hacia atrás?
+let loadingOlder = false;
+
+async function decryptMsg(m) {
+  return {...m,
+    content: await decField(m.content),
+    file_name: m.file_name ? await decField(m.file_name) : '',
+    file_data: m.file_data ? await decField(m.file_data) : '',
+    blurhash: m.blurhash ? await decField(m.blurhash) : '',
+  };
+}
+
+// Descifra e inserta una tanda de mensajes. Devuelve los ya descifrados.
+async function renderBatch(raw, where) {
+  const decs = await Promise.all(raw.map(decryptMsg));
+  const frag = document.createDocumentFragment();
+  for (const m of decs) {
+    if (document.querySelector(`.msg[data-id="${m.id}"]`)) continue;
+    msgCache.set(m.id, m);
+    frag.appendChild(buildMsgEl(m));
+  }
   const box = document.getElementById('msgBox');
-  box.innerHTML = '';
-  msgCache.clear();
-  hideNewMsgs();
-  if (data.messages?.length) {
-    for (const m of data.messages) await addMsg(m, false);
-    regroupMsgs();
-    scrollEnd();
-  } else chkEmpty();
+  if (where === 'prepend') box.insertBefore(frag, box.firstChild);
+  else box.appendChild(frag);
+  for (const m of decs) {
+    if (!m.has_file || !fileCache.has(m.id)) continue;
+    const el = document.querySelector(`.msg[data-id="${m.id}"]`);
+    if (el) renderThumbs({...m, file_data: fileCache.get(m.id)}, el);
+  }
+  return decs;
+}
+
+async function loadMsgs() {
+  const box = document.getElementById('msgBox');
+  const done = beginTask('Cargando mensajes…');
+  try {
+    const data = await (await api(`/api/messages?channel_id=${chId}&limit=${PAGE_SIZE}`)).json();
+    box.innerHTML = '';
+    msgCache.clear();
+    fileCache.clear();   // los adjuntos del canal anterior ya no hacen falta
+    hideNewMsgs();
+    hasMoreOlder = !!data.has_more;
+    oldestId = data.messages?.length ? data.messages[0].id : null;
+    if (data.messages?.length) {
+      await renderBatch(data.messages, 'append');
+      regroupMsgs();
+      scrollEnd();
+    } else chkEmpty();
+  } catch {
+    toast('Error cargando mensajes');
+  } finally { done(); }
+}
+
+// Página anterior, disparada al acercarse al principio del scroll.
+async function loadOlder() {
+  if (loadingOlder || !hasMoreOlder || oldestId == null) return;
+  loadingOlder = true;
+  const box = document.getElementById('msgBox');
+  const done = beginTask('Cargando anteriores…');
+  const prevH = box.scrollHeight, prevTop = box.scrollTop;
+  try {
+    const data = await (await api(`/api/messages?channel_id=${chId}&limit=${PAGE_SIZE}&before=${oldestId}`)).json();
+    hasMoreOlder = !!data.has_more;
+    if (data.messages?.length) {
+      oldestId = data.messages[0].id;
+      await renderBatch(data.messages, 'prepend');
+      regroupMsgs();
+      // Mantener el mensaje que el usuario estaba mirando bajo el cursor.
+      box.scrollTop = box.scrollHeight - prevH + prevTop;
+    }
+  } catch {
+    toast('Error cargando mensajes anteriores');
+  } finally { loadingOlder = false; done(); }
 }
 
 function regroupMsgs() {
@@ -2119,20 +2658,8 @@ function regroupMsgs() {
   });
 }
 
-async function addMsg(m, scroll=true) {
-  if (document.querySelector(`.msg[data-id="${m.id}"]`)) return;
-  m = {...m,
-    content: await decField(m.content),
-    file_name: m.file_name ? await decField(m.file_name) : '',
-    file_data: m.file_data ? await decField(m.file_data) : '',
-  };
-  msgCache.set(m.id, m);
-  const wasPending = consumePendingFor(m);
-
-  const box = document.getElementById('msgBox');
-  const wasNearBottom = isNearBottom();
-  const emp = document.getElementById('emptyState');
-  if (emp) emp.remove();
+// Construye el elemento de un mensaje YA DESCIFRADO, sin insertarlo.
+function buildMsgEl(m) {
   const d = document.createElement('div');
   d.className = 'msg';
   d.dataset.id = m.id;
@@ -2143,38 +2670,40 @@ async function addMsg(m, scroll=true) {
   const t = ts.toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit'});
   const dt = ts.toLocaleDateString('es',{day:'numeric',month:'short'});
   const big = m.content?.length > 500;
-  const kind = fileKind(m);
 
-  const MUSIC_ICON = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>';
-  const PDF_ICON = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="1.8"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><text x="7" y="18" font-size="6" fill="#dc2626" stroke="none" font-family="sans-serif" font-weight="700">PDF</text></svg>';
-  const FILE_ICON = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
-
+  // Si el adjunto ya se descargó en esta sesión (o acabamos de enviarlo) se
+  // pinta directamente; si no, tarjeta con nombre y peso.
   let file = '';
   if (m.has_file && m.file_name) {
-    if (kind === 'image') {
-      file = `<img class="msg-img" src="${m.file_data}" loading="lazy" data-mid="${m.id}">`;
-    } else if (kind === 'audio') {
-      file = `<div class="msg-audio-wrap" data-mid="${m.id}"><div class="msg-attach audio-preview"><div class="att-thumb audio-cover" data-mid="${m.id}">${MUSIC_ICON}</div><div class="att-info"><span class="att-name">${esc(m.file_name)}</span><span class="att-sz msg-attach-sz">${fmtSz(m.file_size)}</span></div><div class="att-actions"><button class="att-btn primary" data-act="dl" data-mid="${m.id}">Descargar</button></div></div><audio class="msg-audio" controls preload="none" src="${m.file_data}"></audio></div>`;
-    } else if (kind === 'video') {
-      file = `<video class="msg-video" controls preload="metadata" src="${m.file_data}"></video>`;
-    } else if (kind === 'pdf') {
-      file = `<div class="msg-attach" data-mid="${m.id}"><div class="att-thumb pdf-thumb" data-mid="${m.id}">${PDF_ICON}</div><div class="att-info"><span class="att-name">${esc(m.file_name)}</span><span class="att-sz msg-attach-sz">${fmtSz(m.file_size)}</span></div><div class="att-actions"><button class="att-btn primary" data-act="open" data-mid="${m.id}">Abrir</button><button class="att-btn" data-act="dl" data-mid="${m.id}">Descargar</button></div></div>`;
-    } else {
-      file = `<div class="msg-attach" data-mid="${m.id}"><div class="att-thumb">${FILE_ICON}</div><div class="att-info"><span class="att-name">${esc(m.file_name)}</span><span class="att-sz msg-attach-sz">${fmtSz(m.file_size)}</span></div><div class="att-actions"><button class="att-btn" data-act="open" data-mid="${m.id}">Abrir</button><button class="att-btn primary" data-act="dl" data-mid="${m.id}">Descargar</button></div></div>`;
-    }
+    const cached = fileCache.get(m.id);
+    file = cached ? attachFullHtml({...m, file_data: cached}) : attachCardHtml(m);
   }
 
   const kebab = `<button class="msg-tool kebab" data-mid="${m.id}" title="Opciones">${ICONS.kebab}</button>`;
-
   d.innerHTML = `<div class="msg-ini" style="${avStyle(m.username)}">${esc(ini)}</div><div class="msg-body" data-time="${t}"><div class="msg-meta"><span class="msg-user">${esc(m.username)}</span><span class="msg-time">${dt} · ${t}</span></div>${m.content?`<div class="msg-text${big?' is-large':''}">${esc(m.content)}</div>`:''}${file}</div><div class="msg-tools">${kebab}</div>`;
+  return d;
+}
 
-  // append: newest at bottom
-  box.appendChild(d);
+async function addMsg(m, scroll=true) {
+  if (document.querySelector(`.msg[data-id="${m.id}"]`)) return;
+  m = await decryptMsg(m);
+  msgCache.set(m.id, m);
+  const wasPending = consumePendingFor(m);
 
-  // Async thumbnail rendering (pdf first page / audio cover art)
-  if (m.has_file) renderThumbs(m, d);
+  const box = document.getElementById('msgBox');
+  const wasNearBottom = isNearBottom();
+  const emp = document.getElementById('emptyState');
+  if (emp) emp.remove();
 
-  // Group check against previous (older) sibling
+  const d = buildMsgEl(m);
+  box.appendChild(d);   // el más reciente, abajo
+  if (oldestId == null) oldestId = m.id;
+
+  // Miniaturas (primera página del PDF / carátula del audio): solo tienen
+  // sentido cuando el contenido ya está en memoria.
+  if (m.has_file && fileCache.has(m.id)) renderThumbs({...m, file_data: fileCache.get(m.id)}, d);
+
+  // Agrupar con el mensaje anterior si es del mismo usuario y reciente
   const p = d.previousElementSibling;
   if (p && p.classList.contains('msg') && !p.classList.contains('pending') && p.dataset.user === m.username) {
     const dtDelta = +d.dataset.ts - +p.dataset.ts;
@@ -2221,8 +2750,9 @@ function chkEmpty() {
       const m = msgCache.get(id);
       if (!m) return;
       const act = actBtn.dataset.act;
-      if (act === 'open') openInTab(m);
-      else if (act === 'dl') dl(m.file_name, m.file_data);
+      if (act === 'load') expandAttach(id);
+      else if (act === 'open') openInTab(m);
+      else if (act === 'dl') dlFile(m);
     }
   });
 
@@ -2277,21 +2807,47 @@ function consumePendingFor(m) {
   const p = pending[idx];
   clearTimeout(p.timer);
   p.el.remove();
+  if (p.data && m.has_file) fileCache.set(m.id, p.data);
   pending.splice(idx, 1);
   return true;
 }
 
 // ── Send ──
+// El esquema guarda un adjunto por mensaje, así que N archivos se envían como N
+// mensajes: el texto acompaña al primero.
 async function send() {
   const inp = document.getElementById('msgInput');
   const txt = inp.value.trim();
   const user = document.getElementById('nameInput').value.trim() || 'Anónimo';
-  if (!txt && !pFile) return;
+  const files = pFiles.slice();
+  if (!txt && !files.length) return;
   if (!cryptoKey) { toast('Desbloquea el cifrado primero'); showUnlock(); return; }
+  if (files.some(f => !f.data)) { toast('Espera a que terminen de leerse los archivos'); return; }
 
-  const file = pFile;
+  inp.value = ''; inp.style.height = 'auto';
+  clearFiles();
+
+  // El blurhash es opcional: si tarda demasiado se envía sin él.
+  if (files.length) {
+    const cap = ms => new Promise(r => setTimeout(r, ms));
+    await Promise.all(files.map(f => Promise.race([f.bh || Promise.resolve(''), cap(6000)])));
+  }
+
+  if (!files.length) {
+    await sendOne(user, txt, null);
+  } else {
+    for (let i = 0; i < files.length; i++) {
+      await sendOne(user, i === 0 ? txt : '', files[i]);
+    }
+  }
+  scrollEnd();
+}
+
+async function sendOne(user, txt, file) {
   const pEl = addPendingRow(user, txt, file);
-  const entry = { user, hasFile: !!file, size: file?.size || 0, el: pEl, timer: null };
+  // Guardamos el data URL local: al llegar el eco lo pasamos a fileCache y así
+  // el adjunto recién enviado se ve sin volver a descargarlo del servidor.
+  const entry = { user, hasFile: !!file, size: file?.size || 0, data: file?.data || null, blurhash: file?.blurhash || '', el: pEl, timer: null };
   entry.timer = setTimeout(() => {
     if (pending.includes(entry)) {
       pEl.classList.add('failed');
@@ -2300,16 +2856,15 @@ async function send() {
     }
   }, 180000);
   pending.push(entry);
-
-  inp.value = ''; inp.style.height = 'auto'; rmFile();
   scrollEnd();
 
   try {
     const cTxt = await encField(txt);
     const cName = file ? await encField(file.name) : '';
     const cData = file ? await encField(file.data) : '';
+    const cBh = file?.blurhash ? await encField(file.blurhash) : '';
     if (!(ws?.readyState === 1)) throw new Error('WS disconnected');
-    ws.send(JSON.stringify({type:'new_message',message:{channel_id:chId,username:user,content:cTxt,has_file:!!file,file_name:cName,file_size:file?.size||0,file_data:cData}}));
+    ws.send(JSON.stringify({type:'new_message',message:{channel_id:chId,username:user,content:cTxt,has_file:!!file,file_name:cName,file_size:file?.size||0,file_data:cData,blurhash:cBh}}));
   } catch(e) {
     clearTimeout(entry.timer);
     const idx = pending.indexOf(entry); if (idx >= 0) pending.splice(idx, 1);
@@ -2320,45 +2875,90 @@ async function send() {
   }
 }
 
-// Files
-function onFile(inp) {
-  const f = inp.files[0]; if (!f) return;
-  if (f.size > 20*1024*1024) { toast('Max 20MB'); inp.value=''; return; }
-  const r = new FileReader();
-  r.onload = () => setFile(f.name, f.size, r.result);
-  r.readAsDataURL(f); inp.value='';
+// ── Cola de adjuntos ──
+const MAX_FILE_BYTES = 20 * 1024 * 1024;
+const MAX_FILES = 10;
+
+function onFile(inp) { addFiles(inp.files); inp.value = ''; }
+
+// rename: para capturas del portapapeles, que llegan sin nombre útil.
+function addFiles(list, rename = false) {
+  const incoming = Array.from(list || []);
+  if (!incoming.length) return;
+  let tooBig = 0, tooMany = 0;
+
+  for (const f of incoming) {
+    if (pFiles.length >= MAX_FILES) { tooMany++; continue; }
+    if (f.size > MAX_FILE_BYTES) { tooBig++; continue; }
+    const name = (rename || !f.name)
+      ? `captura_${Date.now()}_${pFiles.length}.${(f.type.split('/')[1] || 'png')}`
+      : f.name;
+    const entry = { name, size: f.size, data: null };
+    pFiles.push(entry);
+    const r = new FileReader();
+    r.onload = () => {
+      entry.data = r.result;
+      renderFilePrev();
+      // En paralelo mientras el usuario escribe; send() lo espera si hace falta.
+      entry.bh = makeBlurhash(entry.name, entry.data)
+        .then(h => { entry.blurhash = h; return h; })
+        .catch(() => '');
+    };
+    r.onerror = () => {
+      const i = pFiles.indexOf(entry);
+      if (i >= 0) pFiles.splice(i, 1);
+      renderFilePrev();
+      toast(`No se pudo leer ${name}`);
+    };
+    r.readAsDataURL(f);
+  }
+
+  if (tooBig) toast(tooBig > 1 ? `${tooBig} archivos superan 20 MB` : 'Máximo 20 MB por archivo');
+  if (tooMany) toast(`Máximo ${MAX_FILES} archivos a la vez`);
+  renderFilePrev();
 }
 
-function setFile(name, size, data) {
-  pFile = {name,size,data};
+function renderFilePrev() {
   const p = document.getElementById('filePrev');
-  const old = p.querySelector('img'); if (old) old.remove();
-  if (data.startsWith('data:image/')) { const i=document.createElement('img'); i.src=data; p.insertBefore(i,p.firstChild); }
-  document.getElementById('fpName').textContent = name;
-  document.getElementById('fpSize').textContent = fmtSz(size);
+  const list = document.getElementById('fpList');
+  if (!pFiles.length) { p.classList.remove('active'); list.innerHTML = ''; return; }
+  list.innerHTML = pFiles.map((f, i) => {
+    const thumb = f.data && f.data.startsWith('data:image/') ? `<img src="${f.data}">` : '';
+    const spin = f.data ? '' : '<span class="spin sm"></span>';
+    return `<div class="fp-chip">${thumb}${spin}<span class="fp-chip-name">${esc(f.name)}</span>`
+      + `<span class="fp-chip-sz">${fmtSz(f.size)}</span>`
+      + `<button class="fp-chip-x" data-idx="${i}" title="Quitar">&times;</button></div>`;
+  }).join('');
   p.classList.add('active');
 }
 
-function rmFile() {
-  pFile = null;
-  const p = document.getElementById('filePrev');
-  p.classList.remove('active');
-  const i = p.querySelector('img'); if (i) i.remove();
-}
+function removeFile(i) { pFiles.splice(i, 1); renderFilePrev(); }
+function clearFiles() { pFiles = []; renderFilePrev(); }
+
+document.getElementById('fpList').addEventListener('click', e => {
+  const x = e.target.closest('.fp-chip-x');
+  if (x) removeFile(+x.dataset.idx);
+});
 
 function dl(name, url) { const a=document.createElement('a'); a.href=url; a.download=name; a.click(); }
 
-// Paste
+// ── Pegar ──
+// Se aceptan todos los archivos del portapapeles, no solo imágenes.
 document.addEventListener('paste', e => {
-  for (const it of (e.clipboardData?.items||[])) {
-    if (it.type.startsWith('image/')) {
-      e.preventDefault();
-      const f = it.getAsFile(); if (!f) return;
-      if (f.size > 20*1024*1024) { toast('Max 20MB'); return; }
-      const r = new FileReader();
-      r.onload = () => setFile(`screenshot_${Date.now()}.${f.type.split('/')[1]||'png'}`, f.size, r.result);
-      r.readAsDataURL(f); return;
-    }
+  const items = Array.from(e.clipboardData?.items || []);
+  const files = items.filter(it => it.kind === 'file').map(it => it.getAsFile()).filter(Boolean);
+  if (files.length) {
+    e.preventDefault();
+    // Las capturas llegan como "image.png": conviene renombrarlas.
+    const generic = files.every(f => !f.name || /^image\.\w+$/i.test(f.name));
+    addFiles(files, generic);
+    return;
+  }
+  // Copiar desde el gestor de archivos no pone bytes en el portapapeles, solo
+  // una ruta: el navegador no puede leer el archivo y hay que arrastrarlo.
+  const types = Array.from(e.clipboardData?.types || []);
+  if (types.includes('text/uri-list') && !types.includes('text/plain')) {
+    toast('Arrastra el archivo aquí: el portapapeles solo trae su ruta');
   }
 });
 
@@ -2371,10 +2971,12 @@ async function cpTxt(id) {
 }
 
 async function cpImg(id) {
-  const img = document.querySelector(`[data-id="${id}"] .msg-img`);
-  if (!img) return;
+  const m = msgCache.get(id);
+  if (!m) return;
+  const src = document.querySelector(`[data-id="${id}"] .msg-img`)?.src || (await withFile(m))?.file_data;
+  if (!src) return;
   try {
-    const b = await (await fetch(img.src)).blob();
+    const b = await (await fetch(src)).blob();
     const bm = await createImageBitmap(b);
     const c = document.createElement('canvas'); c.width=bm.width; c.height=bm.height;
     c.getContext('2d').drawImage(bm,0,0);
@@ -2419,7 +3021,30 @@ function hideNewMsgs() {
   document.getElementById('newMsgsBtn').classList.remove('show');
 }
 document.getElementById('newMsgsBtn').addEventListener('click', () => { scrollEnd(); hideNewMsgs(); });
-document.getElementById('msgBox').addEventListener('scroll', () => { if (isNearBottom()) hideNewMsgs(); }, { passive: true });
+document.getElementById('msgBox').addEventListener('scroll', e => {
+  if (isNearBottom()) hideNewMsgs();
+  if (e.target.scrollTop < 300) loadOlder();   // scroll infinito hacia atrás
+}, { passive: true });
+
+// ── Indicador de carga global ──
+// Cuenta tareas concurrentes: la barra se apaga cuando termina la última.
+let _tasks = 0;
+function beginTask(label = 'Cargando…') {
+  _tasks++;
+  document.getElementById('loadChipTxt').textContent = label;
+  document.getElementById('loadBar').classList.add('active');
+  document.getElementById('loadChip').classList.add('show');
+  let ended = false;
+  return () => {
+    if (ended) return;
+    ended = true;
+    if (--_tasks <= 0) {
+      _tasks = 0;
+      document.getElementById('loadBar').classList.remove('active');
+      document.getElementById('loadChip').classList.remove('show');
+    }
+  };
+}
 function esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 function fmtSz(b) { return b<1024?b+' B':b<1048576?(b/1024).toFixed(1)+' KB':(b/1048576).toFixed(1)+' MB'; }
 function toast(m) { const t=document.getElementById('toast'); t.textContent=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),2000); }
@@ -2453,9 +3078,7 @@ document.addEventListener('dragleave', e => { e.preventDefault(); dc--; if(dc===
 document.addEventListener('dragover', e => e.preventDefault());
 document.addEventListener('drop', e => {
   e.preventDefault(); dc=0; dz.classList.remove('active');
-  const f=e.dataTransfer?.files?.[0]; if(!f) return;
-  if(f.size>20*1024*1024){toast('Max 20MB');return;}
-  const r=new FileReader(); r.onload=()=>setFile(f.name,f.size,r.result); r.readAsDataURL(f);
+  addFiles(e.dataTransfer?.files);
 });
 
 // Username — auto-asigna un nombre icónico de ciencia/tecnología (persistente por navegador)
