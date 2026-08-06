@@ -1,0 +1,27 @@
+# Entorno de desarrollo. Usa la MISMA base de datos que producción, así que un
+# borrado masivo desde aquí destruye datos reales.
+#
+#   docker compose -p sharedata-dev -f docker-compose.dev.yml up -d --build
+#
+# El nombre de proyecto propio (-p) evita que compose trate el contenedor de
+# producción como huérfano.
+services:
+  sharedata-dev:
+    build: .
+    container_name: sharedata-dev
+    ports:
+      - "8846:8844"
+    environment:
+      # Mismo secreto que producción: los tokens son intercambiables entre ambos.
+      JWT_SECRET: ${JWT_SECRET:-sharedata-secret-change-me-in-prod-9f3ac7}
+      TLS: "false"
+    networks:
+      - databases_default
+      - web-network
+    restart: unless-stopped
+
+networks:
+  databases_default:
+    external: true
+  web-network:
+    external: true

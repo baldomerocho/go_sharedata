@@ -1,3 +1,5 @@
 sharedata
 .claude/
 .gemini/
+.DS_Store
+._*
