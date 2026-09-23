@@ -50,9 +50,10 @@ Genera un código de 6 dígitos (TTL 5 min), lo guarda y lo envía por SMS a tra
 | `200` | `{"ok":true,"ttl":300}` | Código enviado; `ttl` en segundos |
 | `400` | texto plano | Teléfono vacío o JSON inválido |
 | `403` | `Número no registrado` | El teléfono no está en `users` |
-| `502` | `No se pudo enviar el código` | El servicio de SMS falló |
+| `429` | `Espera N s antes de pedir otro código` | Ya se envió un código a ese teléfono hace menos de 60 s; cabecera `Retry-After` en segundos |
+| `502` | `No se pudo enviar el código` | El servicio de SMS falló (el código no queda guardado: se puede reintentar sin esperar) |
 
-No existe endpoint de reenvío: para reenviar, repite esta llamada. Cada llamada crea un OTP nuevo y **los anteriores siguen siendo válidos** hasta expirar (la verificación toma el más reciente que coincida). Tampoco hay rate limiting: si tu app permite pulsar "reenviar" en bucle, se disparan tantos SMS como pulsaciones.
+No existe endpoint de reenvío: para reenviar, repite esta llamada respetando la espera de **60 s por teléfono**. Cada envío correcto **anula los códigos anteriores**: solo vale el último que llegó al usuario. Desactiva el botón de "reenviar" durante el `Retry-After`.
 
 ### `POST /api/auth/verify`
 
@@ -65,6 +66,8 @@ No existe endpoint de reenvío: para reenviar, repite esta llamada. Cada llamada
 | `200` | `{"token":"eyJ…","phone":"+593987654321","name":"Baldo"}` |
 | `400` | `Datos inválidos` (el código debe tener exactamente 6 caracteres) |
 | `401` | `Código inválido o expirado` |
+
+Cada código admite **5 intentos**: cada verificación, acierte o falle, consume uno, y al quinto fallo el código queda anulado y hay que pedir otro con `/api/auth/login`. La respuesta es la misma `401` en todos los casos (código erróneo, expirado, ya usado o agotado), así que tu app no puede distinguirlos: tras varios `401` seguidos, ofrece pedir un código nuevo.
 
 El `token` es un **JWT HS256** con claims `{phone, iat, exp}` y TTL de **30 días**. Guárdalo de forma segura (Keychain / EncryptedSharedPreferences). El servidor solo valida firma y expiración: no comprueba que el usuario siga existiendo, y no hay revocación ni refresh — cuando expira, el usuario repite el flujo de OTP.
 
@@ -236,7 +239,7 @@ Todos requieren `Authorization: Bearer <token>`.
 | `PUT` | `/api/channels/{id}` | `{"name":"Nuevo"}` | `{"ok":true}` |
 | `DELETE` | `/api/channels/{id}` | — | `{"ok":true}` |
 
-El canal **`id=1` ("General") no se puede eliminar** → `400`. Al borrar un canal el servidor solo ejecuta `DELETE FROM channels` y después un `VACUUM messages`, lo que implica que la limpieza de mensajes depende de un `ON DELETE CASCADE` en el esquema (la tabla `messages` no se crea en las migraciones del código: verifícalo en tu base de datos). Los nombres de canal no se cifran y no hay control de acceso por canal: cualquier usuario autenticado ve, crea, renombra y borra cualquier canal.
+El canal **`id=1` ("General") no se puede eliminar** → `400`; un canal inexistente → `404`. Borrar un canal elimina **de forma permanente todos sus mensajes y adjuntos** en la misma transacción, y se emite `channel_deleted`: descarta tu caché local de ese canal (mensajes y archivos descargados). Los nombres de canal no se cifran y no hay control de acceso por canal: cualquier usuario autenticado ve, crea, renombra y borra cualquier canal.
 
 ### Mensajes
 
@@ -320,4 +323,4 @@ Esta es la llamada pesada del sistema: la respuesta puede rondar los 36 MB para 
 
 ### Lo que el servidor no da y tendrás que resolver en el cliente
 
-Búsqueda, indexado o previsualización en servidor (imposible: no tiene la clave) · generación del blurhash · ACK de envío · notificaciones push · presencia o "escribiendo…" · lectura/no leído · permisos por canal · rate limiting · revocación de tokens · paginación hacia adelante (el cursor solo va hacia atrás; para los mensajes nuevos está el WebSocket).
+Búsqueda, indexado o previsualización en servidor (imposible: no tiene la clave) · generación del blurhash · ACK de envío · notificaciones push · presencia o "escribiendo…" · lectura/no leído · permisos por canal · rate limiting fuera del login · revocación de tokens · paginación hacia adelante (el cursor solo va hacia atrás; para los mensajes nuevos está el WebSocket).

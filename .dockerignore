@@ -1,3 +1,5 @@
 sharedata
 .git
 .gitignore
+.env
+.env.develop

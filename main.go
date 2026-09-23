@@ -19,7 +19,6 @@ import (
 	"io/fs"
 	"log"
 	"math/big"
-	mrand "math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -42,13 +41,22 @@ const (
 	dbPassword  = "root"
 	dbName      = "sharedata"
 	serverPort  = ":8844"
-	otpURL      = "http://otp-show-app-1:5066/api/otps"
-	otpChannel  = 1
 	otpTTL      = 5 * time.Minute
+	otpCooldown = 60 * time.Second // espera mínima entre dos envíos al mismo teléfono
+	otpMaxTries = 5                // intentos fallidos antes de anular el código
 	jwtTTL      = 30 * 24 * time.Hour
 )
 
 var jwtSecret = []byte(getenv("JWT_SECRET", "sharedata-secret-change-me-in-prod-9f3ac7"))
+
+// Gateway de envío del OTP. Mismo contrato que GATEWAY_URL / X_API_KEY de
+// go_otp_verify: POST {number, body, channel} con cabecera x-api-key y
+// respuesta 200. Sirve tanto otp-show (sandbox) como el webhook de SMS.
+var (
+	otpURL     = getenv("OTP_URL", "http://otp-show-app-1:5066/api/otps")
+	otpAPIKey  = os.Getenv("OTP_API_KEY")
+	otpChannel = getenv("OTP_CHANNEL", "1")
+)
 
 func getenv(k, def string) string {
 	if v := os.Getenv(k); v != "" {
@@ -333,8 +341,29 @@ func handleChannelAction(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "No se puede eliminar el canal General", 400)
 			return
 		}
-		_, err := db.Exec("DELETE FROM channels WHERE id = $1", id)
+		// Los mensajes (y con ellos sus adjuntos, que viven en file_data) se
+		// borran explícitamente en la misma transacción: no se depende de que
+		// el esquema tenga ON DELETE CASCADE.
+		tx, err := db.Begin()
 		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		defer tx.Rollback()
+		if _, err := tx.Exec("DELETE FROM messages WHERE channel_id = $1", id); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		res, err := tx.Exec("DELETE FROM channels WHERE id = $1", id)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			http.Error(w, "Canal no encontrado", 404)
+			return
+		}
+		if err := tx.Commit(); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
@@ -572,6 +601,28 @@ func migrate() error {
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_otps_phone ON otps(phone, created_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS channels (
+			id SERIAL PRIMARY KEY,
+			name VARCHAR(200) NOT NULL DEFAULT 'General',
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+		)`,
+		// Canal 1 ("General") en una base de datos vacía; si ya hay canales no toca nada.
+		`INSERT INTO channels (name) SELECT 'General' WHERE NOT EXISTS (SELECT 1 FROM channels)`,
+		`CREATE TABLE IF NOT EXISTS messages (
+			id SERIAL PRIMARY KEY,
+			username VARCHAR(100) NOT NULL DEFAULT 'Anónimo',
+			content TEXT NOT NULL DEFAULT '',
+			has_file BOOLEAN DEFAULT FALSE,
+			file_name VARCHAR(500),
+			file_size BIGINT DEFAULT 0,
+			file_data TEXT,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+			channel_id INTEGER DEFAULT 1 REFERENCES channels(id) ON DELETE CASCADE,
+			blurhash TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_channel ON messages(channel_id, created_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at DESC)`,
+		`ALTER TABLE otps ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0`,
 	}
 	for _, s := range stmts {
 		if _, err := db.Exec(s); err != nil {
@@ -579,8 +630,7 @@ func migrate() error {
 		}
 	}
 
-	// messages no se crea aquí (debe preexistir), así que la columna del
-	// blurhash se añade aparte y sin abortar el arranque si falla.
+	// Bases de datos creadas antes de que existiera la columna del blurhash.
 	if _, err := db.Exec(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS blurhash TEXT`); err != nil {
 		log.Println("Aviso: no se pudo añadir la columna blurhash:", err)
 	}
@@ -662,22 +712,70 @@ func authMW(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func sendOTP(code, phone string) error {
-	body, _ := json.Marshal(map[string]any{
-		"body":       code,
-		"number":     phone,
-		"created_at": time.Now().UTC().Format(time.RFC3339),
-		"channel":    strconv.Itoa(otpChannel),
+	body, _ := json.Marshal(map[string]string{
+		"number":  phone,
+		"body":    code,
+		"channel": otpChannel,
 	})
+	req, err := http.NewRequest("POST", otpURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if otpAPIKey != "" {
+		req.Header.Set("x-api-key", otpAPIKey)
+	}
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Post(otpURL, "application/json", bytes.NewReader(body))
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("otp service respondió %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// newOTPCode genera 6 dígitos con crypto/rand.
+func newOTPCode() (string, error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%06d", n.Int64()), nil
+}
+
+// reserveOTP comprueba el enfriamiento por teléfono e inserta el código nuevo.
+// El advisory lock serializa logins simultáneos del mismo teléfono, para que
+// dos peticiones en paralelo no se salten el enfriamiento. Devuelve 0 y la
+// espera restante si todavía no se puede enviar otro.
+func reserveOTP(phone, code string) (int, time.Duration, error) {
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext($1))", phone); err != nil {
+		return 0, 0, err
+	}
+	var since float64
+	err = tx.QueryRow(`SELECT EXTRACT(EPOCH FROM NOW() - created_at) FROM otps
+		WHERE phone = $1 ORDER BY created_at DESC LIMIT 1`, phone).Scan(&since)
+	if err != nil && err != sql.ErrNoRows {
+		return 0, 0, err
+	}
+	if err == nil {
+		if wait := otpCooldown - time.Duration(since*float64(time.Second)); wait > 0 {
+			return 0, wait, nil
+		}
+	}
+	var id int
+	if err := tx.QueryRow("INSERT INTO otps (phone, code, expires_at) VALUES ($1, $2, $3) RETURNING id",
+		phone, code, time.Now().Add(otpTTL)).Scan(&id); err != nil {
+		return 0, 0, err
+	}
+	return id, 0, tx.Commit()
 }
 
 func handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -699,24 +797,41 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var exists bool
-	db.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE phone = $1)", phone).Scan(&exists)
+	if err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM users WHERE phone = $1)", phone).Scan(&exists); err != nil {
+		http.Error(w, "Error interno", 500)
+		return
+	}
 	if !exists {
 		http.Error(w, "Número no registrado", 403)
 		return
 	}
 
-	code := fmt.Sprintf("%06d", mrand.Intn(1000000))
-	expiresAt := time.Now().Add(otpTTL)
-	if _, err := db.Exec("INSERT INTO otps (phone, code, expires_at) VALUES ($1, $2, $3)", phone, code, expiresAt); err != nil {
+	code, err := newOTPCode()
+	if err != nil {
 		http.Error(w, "Error interno", 500)
+		return
+	}
+	id, wait, err := reserveOTP(phone, code)
+	if err != nil {
+		http.Error(w, "Error interno", 500)
+		return
+	}
+	if wait > 0 {
+		secs := int(wait.Seconds() + 0.999)
+		w.Header().Set("Retry-After", strconv.Itoa(secs))
+		http.Error(w, fmt.Sprintf("Espera %d s antes de pedir otro código", secs), 429)
 		return
 	}
 
 	if err := sendOTP(code, phone); err != nil {
 		log.Println("Error enviando OTP:", err)
+		// El código nunca llegó: se borra para no bloquear el reintento.
+		db.Exec("DELETE FROM otps WHERE id = $1", id)
 		http.Error(w, "No se pudo enviar el código", 502)
 		return
 	}
+	// Solo el último código enviado es válido.
+	db.Exec("UPDATE otps SET used = true WHERE phone = $1 AND id <> $2 AND used = false", phone, id)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"ok": true, "ttl": int(otpTTL.Seconds())})
@@ -742,16 +857,29 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var id int
+	// Cada intento consume uno del OTP vigente, acierte o no. Un único UPDATE
+	// atómico: el FOR UPDATE impide que dos peticiones canjeen el mismo código,
+	// y al acertar o agotar los intentos el código queda anulado.
+	var ok bool
 	err := db.QueryRow(`
-		SELECT id FROM otps
-		WHERE phone = $1 AND code = $2 AND used = false AND expires_at > NOW()
-		ORDER BY created_at DESC LIMIT 1`, phone, code).Scan(&id)
-	if err != nil {
+		UPDATE otps SET
+			attempts = attempts + 1,
+			used = (code = $2 OR attempts + 1 >= $3)
+		WHERE id = (
+			SELECT id FROM otps
+			WHERE phone = $1 AND used = false AND expires_at > NOW()
+			ORDER BY created_at DESC LIMIT 1
+			FOR UPDATE
+		) AND attempts < $3
+		RETURNING code = $2`, phone, code, otpMaxTries).Scan(&ok)
+	if err != nil && err != sql.ErrNoRows {
+		http.Error(w, "Error interno", 500)
+		return
+	}
+	if !ok {
 		http.Error(w, "Código inválido o expirado", 401)
 		return
 	}
-	db.Exec("UPDATE otps SET used = true WHERE id = $1", id)
 	db.Exec("DELETE FROM otps WHERE expires_at < NOW() - INTERVAL '1 day'")
 
 	token, err := signJWT(phone)

@@ -31,8 +31,8 @@ Las redes `databases_default` y `web-network` de ambos compose son externas y de
 
 El transporte principal es WebSocket, no REST. Los mensajes **se envían por WS** (`{type:"new_message"}`), con el adjunto dentro; el servidor los persiste y hace broadcast a todos los clientes conectados (`broadcast()` en `main.go`). Los endpoints REST son para autenticación, historial, descarga de adjuntos, gestión de canales y borrados:
 
-- `POST /api/auth/login` → genera OTP, lo guarda en `otps` y lo envía al microservicio externo `otp-show-app-1:5066`
-- `POST /api/auth/verify` → valida OTP, devuelve JWT (HS256 firmado a mano, sin librería, TTL 30 días)
+- `POST /api/auth/login` → genera OTP con `crypto/rand`, lo guarda en `otps` y lo envía al gateway `OTP_URL`. Enfriamiento de 60 s por teléfono (429 + `Retry-After`, serializado con `pg_advisory_xact_lock`); si el envío falla se borra el código, y si sale bien se anulan los anteriores
+- `POST /api/auth/verify` → valida OTP con un único `UPDATE … RETURNING` atómico que consume un intento (máx. `otpMaxTries` = 5) y devuelve JWT (HS256 firmado a mano, sin librería, TTL 30 días)
 - `/ws?token=…` → JWT por query string (los navegadores no permiten cabeceras en WebSocket)
 - `authMW` acepta el token vía `Authorization: Bearer` o `?token=`, e inyecta `X-Phone` en la request
 
@@ -62,7 +62,7 @@ Consecuencias que restringen cualquier cambio:
 
 ### Base de datos
 
-Las tablas `users` y `otps` se crean en `migrate()` al arrancar. Las tablas `channels` y `messages` **no** están en las migraciones: deben preexistir (solo se les añade la columna `blurhash`). El canal `id=1` ("General") es especial y no se puede eliminar. Los usuarios no se autoregistran: hay que insertarlos a mano (`INSERT INTO users (phone, name) VALUES (...)`), el login rechaza teléfonos desconocidos con 403.
+Todas las tablas (`users`, `otps`, `channels`, `messages`) se crean con `CREATE TABLE IF NOT EXISTS` en `migrate()` al arrancar; en una base vacía se siembra el canal 1 ("General"). El canal `id=1` es especial y no se puede eliminar. Borrar un canal elimina sus mensajes (y con ellos los adjuntos) con un `DELETE` explícito en la misma transacción, sin depender del `ON DELETE CASCADE` del esquema, que las bases antiguas pueden no tener. Los usuarios no se autoregistran: hay que insertarlos a mano (`INSERT INTO users (phone, name) VALUES (...)`), el login rechaza teléfonos desconocidos con 403.
 
 Tras cada borrado masivo o de canal se lanza `VACUUM messages` en una goroutine, porque los data URLs base64 inflan la tabla.
 
@@ -78,4 +78,4 @@ Sin framework. Estado global en variables sueltas (`ws`, `chId`, `chs`, `msgCach
 
 ### Configuración
 
-Casi todo está hardcodeado como constantes en la cabecera de `main.go` (credenciales de PostgreSQL, host y canal del servicio OTP, puerto `8844`). Solo `JWT_SECRET` y `TLS` se leen del entorno. Con `TLS=true` (valor por defecto) el servidor genera un certificado autofirmado ECDSA en memoria al arrancar, con IPs fijas en `generateSelfSignedCert()` — ajústalas si cambia la red local. En Docker se usa `TLS=false` porque hay un proxy delante.
+Casi todo está hardcodeado como constantes en la cabecera de `main.go` (credenciales de PostgreSQL, puerto `8844`, TTL y límites del OTP). Del entorno se leen `JWT_SECRET`, `TLS` y el gateway del OTP: `OTP_URL` (por defecto `http://otp-show-app-1:5066/api/otps`), `OTP_API_KEY` (cabecera `x-api-key`, se omite si está vacía) y `OTP_CHANNEL` (por defecto `"1"`). En Docker estas tres vienen de un `env_file` opcional en la raíz: `.env` en producción y `.env.develop` en dev (plantilla en `.env.example`; ninguno se versiona). El gateway sigue el mismo contrato que `GATEWAY_URL`/`X_API_KEY` de `go_otp_verify` (`POST {number, body, channel}`, éxito solo con 200), así que acepta tanto otp-show (sandbox, muestra el código en su PWA sin enviar SMS) como el webhook de SMS de producción. Con `TLS=true` (valor por defecto) el servidor genera un certificado autofirmado ECDSA en memoria al arrancar, con IPs fijas en `generateSelfSignedCert()` — ajústalas si cambia la red local. En Docker se usa `TLS=false` porque hay un proxy delante.

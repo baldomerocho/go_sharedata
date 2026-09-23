@@ -11,6 +11,11 @@ services:
     container_name: sharedata-dev
     ports:
       - "8846:8844"
+    # OTP_URL, OTP_API_KEY y OTP_CHANNEL (ver .env.example). Si falta .env.develop
+    # se usan los valores por defecto de main.go.
+    env_file:
+      - path: .env.develop
+        required: false
     environment:
       # Mismo secreto que producción: los tokens son intercambiables entre ambos.
       JWT_SECRET: ${JWT_SECRET:-sharedata-secret-change-me-in-prod-9f3ac7}
