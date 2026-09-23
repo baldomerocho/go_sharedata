@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Qué es
 
-ShareData: chat multicanal con compartición de archivos, cifrado extremo a extremo en el cliente, autenticación por OTP vía SMS + JWT. Todo el backend es **un solo archivo** (`main.go`, ~740 líneas) y todo el frontend es **un solo archivo** (`static/index.html`, ~2500 líneas: HTML + CSS + JS vanilla, sin build step ni dependencias npm). No hay tests.
+ShareData: chat multicanal con compartición de archivos, cifrado extremo a extremo en el cliente, autenticación por OTP vía SMS + JWT. Todo el backend es **un solo archivo** (`main.go`, ~810 líneas) y todo el frontend es **un solo archivo** (`static/index.html`, ~3450 líneas: HTML + CSS + JS vanilla, sin build step ni dependencias npm). No hay tests.
 
 ## Comandos
 
@@ -12,13 +12,16 @@ ShareData: chat multicanal con compartición de archivos, cifrado extremo a extr
 go build -o sharedata .          # compilar
 go run .                         # ejecutar (requiere PostgreSQL accesible como host "postgres-db")
 go vet ./...                     # análisis estático
-docker compose up -d --build     # despliegue real (TLS=false, detrás de proxy)
+docker compose up -d --build     # producción (TLS=false, detrás de proxy)
 docker compose logs -f sharedata
+docker compose -p sharedata-dev -f docker-compose.dev.yml up -d --build   # entorno dev (puerto 8846)
 ```
 
-El frontend se sirve vía `go:embed static/*`: **cualquier cambio en `static/index.html` exige recompilar el binario**, no basta con recargar el navegador.
+El frontend se sirve vía `go:embed static/*`: **cualquier cambio en `static/index.html` exige recompilar el binario** (o reconstruir la imagen), no basta con recargar el navegador.
 
-Las redes `databases_default` y `web-network` de `docker-compose.yml` son externas y deben existir previamente.
+**El entorno dev usa la MISMA base de datos y el mismo `JWT_SECRET` que producción**: un borrado masivo desde dev destruye datos reales y los tokens valen en ambos. El `-p sharedata-dev` es obligatorio para que compose no trate el contenedor de producción como huérfano.
+
+Las redes `databases_default` y `web-network` de ambos compose son externas y deben existir previamente.
 
 `API2.md` documenta el contrato **vigente** para clientes externos (REST, protocolo WebSocket, parámetros exactos del E2EE y blurhash). Manténlo sincronizado al tocar handlers, tipos de evento o el esquema de cifrado. `API.md` es la v1 congelada: no la edites, describe el servidor anterior a la paginación y a los adjuntos bajo demanda.
 
@@ -26,7 +29,7 @@ Las redes `databases_default` y `web-network` de `docker-compose.yml` son extern
 
 ### Flujo de datos
 
-El transporte principal es WebSocket, no REST. Los mensajes **se envían por WS** (`{type:"new_message"}`) y el servidor los persiste y hace broadcast a todos los clientes conectados (`broadcast()` en `main.go`). Los endpoints REST son solo para lectura inicial, gestión de canales y borrados:
+El transporte principal es WebSocket, no REST. Los mensajes **se envían por WS** (`{type:"new_message"}`), con el adjunto dentro; el servidor los persiste y hace broadcast a todos los clientes conectados (`broadcast()` en `main.go`). Los endpoints REST son para autenticación, historial, descarga de adjuntos, gestión de canales y borrados:
 
 - `POST /api/auth/login` → genera OTP, lo guarda en `otps` y lo envía al microservicio externo `otp-show-app-1:5066`
 - `POST /api/auth/verify` → valida OTP, devuelve JWT (HS256 firmado a mano, sin librería, TTL 30 días)
@@ -35,9 +38,21 @@ El transporte principal es WebSocket, no REST. Los mensajes **se envían por WS*
 
 El broadcast es global: **todos los clientes reciben todos los eventos de todos los canales**; el filtrado por canal ocurre en el cliente.
 
+### Adjuntos bajo demanda — no reintroducir `file_data` en el tráfico masivo
+
+Los archivos viajan como data URLs base64 cifrados en la columna `file_data` de `messages` (no hay almacenamiento de blobs aparte de PostgreSQL). Para que la app no colapse, **ese campo nunca va en el tráfico masivo**:
+
+- `GET /api/messages` devuelve solo metadatos y pagina hacia atrás por cursor (`before` = id del mensaje más antiguo que se tiene, `has_more`; `limit` 40 por defecto, 200 máx.). La primera página son los mensajes **más recientes**, invertidos a orden ascendente antes de responder. En el cliente, `loadOlder()` pide las páginas anteriores.
+- El eco `new_message` del WS se retransmite con `FileData` vaciado.
+- El contenido se pide con `GET /api/files/{id}` solo al abrir el adjunto. En el cliente, `ensureFile()` / `withFile()` descargan, descifran y cachean por id en `fileCache` (con `fileInflight` para no duplicar peticiones).
+
+Un mensaje lleva un solo adjunto; el envío multi-archivo (hasta `MAX_FILES` = 10, `MAX_FILE_BYTES` = 20 MB cada uno) manda un mensaje por archivo, con el texto solo en el primero. El WS tiene `SetReadLimit` de 50 MB.
+
+**Blurhash**: miniatura difuminada (4×3 componentes, cifrada como los demás campos) que la genera **el cliente que sube el archivo** (`makeBlurhash()`) porque el servidor no tiene la clave. Se pinta de fondo en la tarjeta del adjunto mientras no se ha descargado. Su columna se añade con `ALTER TABLE … ADD COLUMN IF NOT EXISTS` en `migrate()`.
+
 ### E2EE — la restricción de diseño central
 
-El servidor nunca ve texto plano. En el navegador, `deriveKey()` deriva AES-256-GCM con PBKDF2 (SHA-256, 200 000 iteraciones, sal **fija y hardcodeada** `sharedata/v1/ws-salt`) a partir de una passphrase que el usuario introduce tras el OTP. Los campos `content`, `file_name` y `file_data` se cifran con `encField()` antes de enviarse y se descifran con `decField()` al renderizar. El formato en base de datos es `E1:<iv_b64url>:<ciphertext_b64url>`.
+El servidor nunca ve texto plano. En el navegador, `deriveKey()` deriva AES-256-GCM con PBKDF2 (SHA-256, 200 000 iteraciones, sal **fija y hardcodeada** `sharedata/v1/ws-salt`) a partir de una passphrase que el usuario introduce tras el OTP. Los campos `content`, `file_name`, `file_data` y `blurhash` se cifran con `encField()` antes de enviarse y se descifran con `decField()` al renderizar. El formato en base de datos es `E1:<iv_b64url>:<ciphertext_b64url>`.
 
 Consecuencias que restringen cualquier cambio:
 
@@ -45,24 +60,22 @@ Consecuencias que restringen cualquier cambio:
 - El servidor **no puede** buscar, indexar, filtrar ni previsualizar contenido. Cualquier funcionalidad de ese tipo debe implementarse en el cliente.
 - Si se cambia el esquema de cifrado hay que versionar `ENC_VER`; `decField()` devuelve el string tal cual si no empieza por el prefijo esperado, y `🔒 cifrado` si no hay clave.
 
-Los archivos se transportan como data URLs base64 dentro del propio mensaje (columna `file_data`), límite de 20 MB en el cliente, `SetReadLimit` de 50 MB en el WS. No hay almacenamiento de blobs aparte de PostgreSQL.
-
 ### Base de datos
 
-Las tablas `users` y `otps` se crean en `migrate()` al arrancar. Las tablas `channels` y `messages` **no** están en las migraciones: deben preexistir. El canal `id=1` ("General") es especial y no se puede eliminar. Los usuarios no se autoregistran: hay que insertarlos a mano (`INSERT INTO users (phone, name) VALUES (...)`), el login rechaza teléfonos desconocidos con 403.
+Las tablas `users` y `otps` se crean en `migrate()` al arrancar. Las tablas `channels` y `messages` **no** están en las migraciones: deben preexistir (solo se les añade la columna `blurhash`). El canal `id=1` ("General") es especial y no se puede eliminar. Los usuarios no se autoregistran: hay que insertarlos a mano (`INSERT INTO users (phone, name) VALUES (...)`), el login rechaza teléfonos desconocidos con 403.
 
-Tras cada borrado masivo se lanza `VACUUM messages` en una goroutine, porque los data URLs base64 inflan la tabla.
+Tras cada borrado masivo o de canal se lanza `VACUUM messages` en una goroutine, porque los data URLs base64 inflan la tabla.
 
 ### Frontend
 
-Sin framework. Estado global en variables sueltas (`ws`, `chId`, `chs`, `msgCache`, `pending`). Puntos a conocer antes de tocarlo:
+Sin framework. Estado global en variables sueltas (`ws`, `chId`, `chs`, `msgCache`, `pending`, `fileCache`). Puntos a conocer antes de tocarlo:
 
 - **Filas fantasma**: `addPendingRow()` pinta el mensaje optimistamente y `consumePendingFor()` lo reconcilia cuando llega el eco del broadcast, casando por `(username, hasFile, fileSize)` — no hay id de correlación, así que dos envíos idénticos simultáneos pueden confundirse.
 - **Temas**: variables CSS en `:root` (oscuro por defecto) y `[data-theme="light"]`. El tema se aplica en un script inline en el `<head>` para evitar parpadeo. Nunca hardcodear colores; usar los tokens (`--bg`, `--surface`, `--text2`, `--gold`, …).
-- **Previews**: miniaturas de PDF con pdf.js cargado bajo demanda desde CDN (`ensurePdfJs()`), carátulas de audio parseando tags ID3 a mano (`extractID3Cover()`), reproductores nativos y lightbox de imágenes. Todo se genera desde el data URL ya descifrado, dentro de `requestIdleCallback`.
-- **Menú contextual** por tipo de archivo (`buildCtxItems()`), con pulsación larga en táctil.
-- El nombre visible del usuario es independiente del teléfono: se asigna un nombre aleatorio de científicos/tecnólogos en el primer arranque y se guarda en `localStorage` (`sd_user`).
+- **Previews**: miniaturas de PDF con pdf.js cargado bajo demanda desde CDN (`ensurePdfJs()`), carátulas de audio parseando tags ID3 a mano (`extractID3Cover()`), reproductores nativos y lightbox de imágenes. Como el historial no trae el archivo, las previews se generan a partir del data URL descargado y descifrado.
+- **Menú contextual** por tipo de archivo (`buildCtxItems()`), con pulsación larga en táctil. Las acciones que necesitan el archivo pasan por `withFile()`.
+- El nombre visible del usuario es independiente del teléfono: se asigna un nombre aleatorio de científicos/tecnólogos en el primer arranque y se guarda en `localStorage` (`sd_user`). El canal activo se guarda en `sd_ch` y el tema en `sd_theme`.
 
 ### Configuración
 
-Casi todo está hardcodeado como constantes en la cabecera de `main.go` (credenciales de PostgreSQL, host y canal del servicio OTP, puerto). Solo `JWT_SECRET` y `TLS` se leen del entorno. Con `TLS=true` (valor por defecto) el servidor genera un certificado autofirmado ECDSA en memoria al arrancar, con IPs fijas en `generateSelfSignedCert()` — ajústalas si cambia la red local. En Docker se usa `TLS=false` porque hay un proxy delante.
+Casi todo está hardcodeado como constantes en la cabecera de `main.go` (credenciales de PostgreSQL, host y canal del servicio OTP, puerto `8844`). Solo `JWT_SECRET` y `TLS` se leen del entorno. Con `TLS=true` (valor por defecto) el servidor genera un certificado autofirmado ECDSA en memoria al arrancar, con IPs fijas en `generateSelfSignedCert()` — ajústalas si cambia la red local. En Docker se usa `TLS=false` porque hay un proxy delante.
