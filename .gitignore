@@ -3,3 +3,5 @@ sharedata
 .gemini/
 .DS_Store
 ._*
+.env
+.env.develop
