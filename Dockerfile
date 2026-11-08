@@ -3,7 +3,8 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /sharedata .
+ARG BUILD_REVISION=local
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X main.buildRevision=${BUILD_REVISION}" -o /sharedata .
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates

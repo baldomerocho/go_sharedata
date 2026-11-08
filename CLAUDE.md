@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Qué es
 
-ShareData: chat multicanal con compartición de archivos, cifrado extremo a extremo en el cliente, autenticación por OTP vía SMS + JWT. Todo el backend es **un solo archivo** (`main.go`, ~810 líneas) y todo el frontend es **un solo archivo** (`static/index.html`, ~3450 líneas: HTML + CSS + JS vanilla, sin build step ni dependencias npm). No hay tests.
+ShareData: chat multicanal con compartición de archivos, cifrado extremo a extremo en el cliente, autenticación por OTP vía SMS + JWT. Todo el backend es **un solo archivo** (`main.go`, ~810 líneas) y todo el frontend es **un solo archivo** (`static/index.html`, ~3450 líneas: HTML + CSS + JS vanilla, sin build step ni dependencias npm). Hay tests de configuración y distribución entre réplicas; estos últimos usan TEST_DATABASE_URL con PostgreSQL descartable.
 
 ## Comandos
 
@@ -29,7 +29,7 @@ Las redes `databases_default` y `web-network` de ambos compose son externas y de
 
 ### Flujo de datos
 
-El transporte principal es WebSocket, no REST. Los mensajes **se envían por WS** (`{type:"new_message"}`), con el adjunto dentro; el servidor los persiste y hace broadcast a todos los clientes conectados (`broadcast()` en `main.go`). Los endpoints REST son para autenticación, historial, descarga de adjuntos, gestión de canales y borrados:
+El transporte principal es WebSocket, no REST. Los mensajes **se envían por WS** (`{type:"new_message"}`), con el adjunto dentro; el servidor los persiste y hace broadcast a todos los clientes conectados (`broadcast()` en `main.go` y `realtime.go`). Los endpoints REST son para autenticación, historial, descarga de adjuntos, gestión de canales y borrados:
 
 - `POST /api/auth/login` → genera OTP con `crypto/rand`, lo guarda en `otps` y lo envía al gateway `OTP_URL`. Enfriamiento de 60 s por teléfono (429 + `Retry-After`, serializado con `pg_advisory_xact_lock`); si el envío falla se borra el código, y si sale bien se anulan los anteriores
 - `POST /api/auth/verify` → valida OTP con un único `UPDATE … RETURNING` atómico que consume un intento (máx. `otpMaxTries` = 5) y devuelve JWT (HS256 firmado a mano, sin librería, TTL 30 días)
@@ -89,5 +89,15 @@ JWT con otros entornos; la advertencia del compose histórico no aplica a este
  despliegue. Imágenes compiladas únicamente por GitHub Actions, publicadas por SHA
  e importadas en k3s. Secretos fuera de Git en `/opt/sharedata/credentials.json`.
 Endpoints operativos `/healthz` y `/readyz`; este último comprueba PostgreSQL.
-Una réplica por broadcast en memoria. No agregar usuarios ni simular SMS sin
+Dos réplicas con distribución de eventos mediante PostgreSQL LISTEN/NOTIFY y tabla realtime_events. RollingUpdate y apagado gradual. No agregar usuarios ni simular SMS sin
 instrucciones; configurar gateway OTP y teléfonos autorizados para iniciar sesión.
+
+
+CI/CD completo: .github/workflows/build.yml y deploy/README.md. El build corre
+hospedado; el operador del VPS valida procedencia y salud y restaura el spec previo
+si falla. El runner no debe hacer checkout en el servidor ni ejecutar scripts del
+repo como root. /opt/sharedata/deploy-settings.json define las referencias fiables.
+La entrada local apunta al ClusterIP estable. No volver a usar port-forward al pod.
+La reconexión WS recarga metadatos; las escrituras se serializan por conexión.
+El bootstrap del origen antiguo tuvo una interrupción local breve durante su
+sustitución; distinguir esa conversión inicial de las mediciones de rolling update.

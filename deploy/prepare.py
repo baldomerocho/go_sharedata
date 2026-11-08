@@ -38,17 +38,27 @@ if r.returncode:
 subprocess.run(['k3s', 'kubectl', 'create', 'namespace', 'sharedata'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 secret = {'apiVersion': 'v1', 'kind': 'Secret', 'metadata': {'name': 'sharedata-config', 'namespace': 'sharedata'}, 'type': 'Opaque', 'stringData': config}
 subprocess.run(['k3s', 'kubectl', 'apply', '-f', '-'], input=json.dumps(secret), text=True, check=True)
-unit = '''[Unit]
-Description=ShareData origin for Cloudflare Tunnel
+# Entrada estable al Service (no un port-forward ligado a un pod).
+service = {'apiVersion':'v1','kind':'Service','metadata':{'name':'sharedata','namespace':'sharedata'},'spec':{'selector':{'app':'sharedata'},'ports':[{'port':8844,'targetPort':8844}]}}
+subprocess.run(['k3s','kubectl','apply','-f','-'],input=json.dumps(service),text=True,check=True)
+ip = subprocess.check_output(['k3s','kubectl','-n','sharedata','get','service','sharedata','-o','jsonpath={.spec.clusterIP}'],text=True).strip()
+unit = f"""[Unit]
+Description=ShareData stable origin for Cloudflare Tunnel
 After=k3s.service
 Requires=k3s.service
 [Service]
-ExecStart=/usr/local/bin/k3s kubectl -n sharedata port-forward --address=127.0.0.1 service/sharedata 8844:8844
+User=nobody
+Group=nogroup
+ExecStart=/usr/bin/python3 /usr/local/lib/sharedata/proxy.py {ip}
 Restart=always
-RestartSec=3
+RestartSec=1
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
 [Install]
 WantedBy=multi-user.target
-'''
+"""
 pathlib.Path('/etc/systemd/system/sharedata-forward.service').write_text(unit)
 subprocess.run(['systemctl', 'daemon-reload'], check=True)
 subprocess.run(['systemctl', 'enable', '--now', 'sharedata-forward'], check=True)

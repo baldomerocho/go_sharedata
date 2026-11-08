@@ -331,3 +331,12 @@ Búsqueda, indexado o previsualización en servidor (imposible: no tiene la clav
 - `GET /healthz`: proceso disponible, `200` y `ok`.
 - `GET /readyz`: PostgreSQL responde en un máximo de 2 segundos; `200` y `ok`,
   o `503` y `unavailable`. No devuelve configuración ni errores internos.
+
+
+## Reconexión durante actualizaciones
+
+El servidor puede cerrar WebSocket con código `1012` durante una actualización.
+Reconectar y consultar canales/historial reciente permite recuperar los cambios
+ocurridos mientras la conexión no estaba activa. Las réplicas comparten eventos;
+los adjuntos siguen descargándose únicamente mediante `/api/files/{id}`.
+`/readyz` añade la cabecera operativa `X-ShareData-Revision` con la revisión servida.

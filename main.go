@@ -24,13 +24,15 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
-	_ "github.com/lib/pq"
 )
 
 //go:embed static/*
@@ -86,7 +88,7 @@ var (
 		ReadBufferSize:  1024 * 64,
 		WriteBufferSize: 1024 * 64,
 	}
-	clients   = make(map[*websocket.Conn]bool)
+	clients   = make(map[*websocket.Conn]*sync.Mutex)
 	clientsMu sync.RWMutex
 )
 
@@ -117,6 +119,10 @@ type WSEvent struct {
 	Period    string   `json:"period,omitempty"`
 }
 
+var realtime *realtimeBus
+var draining atomic.Bool
+var buildRevision = "local"
+
 func main() {
 	var err error
 	connStr := databaseURL()
@@ -127,8 +133,8 @@ func main() {
 	}
 	defer db.Close()
 
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(5)
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(3)
 
 	if err = db.Ping(); err != nil {
 		log.Fatal("No se puede hacer ping a PostgreSQL:", err)
@@ -139,11 +145,22 @@ func main() {
 		log.Fatal("Error ejecutando migraciones:", err)
 	}
 
+	realtime, err = newRealtimeBus(db, connStr, broadcastLocal)
+	if err != nil {
+		log.Fatal("No se pudo iniciar la distribución de eventos")
+	}
+	defer realtime.close()
+
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	http.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-ShareData-Revision", buildRevision)
+		if draining.Load() || !realtime.healthy() {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 		if err := db.PingContext(ctx); err != nil {
@@ -171,7 +188,24 @@ func main() {
 
 	useTLS := strings.EqualFold(getenv("TLS", "true"), "true")
 
-	server := &http.Server{Addr: serverPort}
+	server := &http.Server{Addr: serverPort, ReadHeaderTimeout: 10 * time.Second}
+	stop, cancelSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancelSignals()
+	go func() {
+		<-stop.Done()
+		draining.Store(true)
+		// Permite que k3s retire este endpoint antes de cerrar conexiones.
+		time.Sleep(8 * time.Second)
+		clientsMu.RLock()
+		for conn := range clients {
+			_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseServiceRestart, ""), time.Now().Add(time.Second))
+			_ = conn.Close()
+		}
+		clientsMu.RUnlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_ = server.Shutdown(ctx)
+	}()
 
 	if useTLS {
 		tlsCert, err := generateSelfSignedCert()
@@ -180,10 +214,13 @@ func main() {
 		}
 		server.TLSConfig = &tls.Config{Certificates: []tls.Certificate{tlsCert}}
 		log.Printf("ShareData corriendo en https://0.0.0.0%s", serverPort)
-		log.Fatal(server.ListenAndServeTLS("", ""))
+		err = server.ListenAndServeTLS("", "")
 	} else {
 		log.Printf("ShareData corriendo en http://0.0.0.0%s (TLS desactivado — detrás de proxy)", serverPort)
-		log.Fatal(server.ListenAndServe())
+		err = server.ListenAndServe()
+	}
+	if err != nil && err != http.ErrServerClosed {
+		log.Fatal(err)
 	}
 }
 
@@ -210,7 +247,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn.SetReadLimit(50 * 1024 * 1024)
 
 	clientsMu.Lock()
-	clients[conn] = true
+	clients[conn] = &sync.Mutex{}
 	clientsMu.Unlock()
 
 	defer func() {
@@ -277,16 +314,34 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 }
 
 func broadcast(event WSEvent) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := realtime.publish(ctx, event); err != nil {
+		log.Print("No se pudo distribuir el evento compartido")
+	}
+}
+
+func broadcastLocal(event WSEvent) {
 	data, err := json.Marshal(event)
 	if err != nil {
 		return
 	}
 	clientsMu.RLock()
-	defer clientsMu.RUnlock()
-	for conn := range clients {
-		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-			conn.Close()
+	peers := make(map[*websocket.Conn]*sync.Mutex, len(clients))
+	for conn, mu := range clients {
+		peers[conn] = mu
+	}
+	clientsMu.RUnlock()
+	for conn, mu := range peers {
+		mu.Lock()
+		_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		err := conn.WriteMessage(websocket.TextMessage, data)
+		mu.Unlock()
+		if err != nil {
+			_ = conn.Close()
+			clientsMu.Lock()
 			delete(clients, conn)
+			clientsMu.Unlock()
 		}
 	}
 }
@@ -611,7 +666,20 @@ func deleteMessages(period string, channelID int) (int64, error) {
 // ── Auth / OTP / JWT ──
 
 func migrate() error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext('sharedata_migrations'))"); err != nil {
+		return err
+	}
 	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS realtime_events (
+			id BIGSERIAL PRIMARY KEY, payload JSONB NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_realtime_events_created ON realtime_events(created_at)`,
 		`CREATE TABLE IF NOT EXISTS users (
 			id SERIAL PRIMARY KEY,
 			phone VARCHAR(30) UNIQUE NOT NULL,
@@ -651,14 +719,17 @@ func migrate() error {
 		`ALTER TABLE otps ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0`,
 	}
 	for _, s := range stmts {
-		if _, err := db.Exec(s); err != nil {
+		if _, err := tx.Exec(s); err != nil {
 			return err
 		}
 	}
 
 	// Bases de datos creadas antes de que existiera la columna del blurhash.
-	if _, err := db.Exec(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS blurhash TEXT`); err != nil {
-		log.Println("Aviso: no se pudo añadir la columna blurhash:", err)
+	if _, err := tx.Exec(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS blurhash TEXT`); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 	var n int
 	db.QueryRow("SELECT COUNT(*) FROM users").Scan(&n)
