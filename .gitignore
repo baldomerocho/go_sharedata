@@ -5,3 +5,6 @@ sharedata
 ._*
 .env
 .env.develop
+
+__pycache__/
+*.pyc

@@ -23,7 +23,7 @@ password = urllib.parse.urlsplit(config['DATABASE_URL']).password
 # Contraseña generada localmente: solo hex, nunca datos del usuario en SQL.
 assert password and all(c in '0123456789abcdef' for c in password)
 psql = ['k3s', 'kubectl', '-n', 'dev-databases', 'exec', '-i', 'postgres-0', '--', 'psql', '-U', 'dev_admin', '-d', 'development', '-v', 'ON_ERROR_STOP=1', '-At']
-sql = f"""
+sql = fr"""
 DO $body$ BEGIN
  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'sharedata_app') THEN
   CREATE ROLE sharedata_app LOGIN PASSWORD '{password}' NOSUPERUSER NOCREATEDB NOCREATEROLE;
