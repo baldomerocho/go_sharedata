@@ -2202,12 +2202,17 @@ function logout() {
 }
 
 // WS
+let wsWasConnected = false;
 function conn() {
   if (!getToken()) { showLogin(); return; }
   if (ws) { ws.onclose = null; ws.onerror = null; ws.onmessage = null; try { ws.close(); } catch(e) {} ws = null; }
   const W = `${location.protocol==='https:'?'wss:':'ws:'}//${location.host}/ws?token=${encodeURIComponent(getToken())}`;
   ws = new WebSocket(W);
-  ws.onopen = () => document.getElementById('statusDot').classList.remove('disconnected');
+  ws.onopen = () => {
+    document.getElementById('statusDot').classList.remove('disconnected');
+    if (wsWasConnected) Promise.allSettled([loadChs(), loadMsgs()]);
+    wsWasConnected = true;
+  };
   ws.onclose = () => { document.getElementById('statusDot').classList.add('disconnected'); setTimeout(conn, 2000); };
   ws.onerror = () => ws.close();
   ws.onmessage = e => {
