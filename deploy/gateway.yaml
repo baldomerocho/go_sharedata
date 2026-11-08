@@ -1,0 +1,95 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sharedata-gateway
+  namespace: sharedata
+data:
+  Caddyfile: |
+    {
+      admin 127.0.0.1:12019
+      auto_https off
+      persist_config off
+      log {
+        format filter {
+          wrap json
+          fields {
+            request delete
+          }
+        }
+      }
+    }
+    :8844, :8848 {
+      bind 127.0.0.1
+      reverse_proxy http://sharedata.sharedata.svc.cluster.local:8844 {
+        transport http {
+          keepalive off
+          dial_timeout 2s
+          response_header_timeout 15s
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sharedata-gateway
+  namespace: sharedata
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: sharedata-gateway
+  template:
+    metadata:
+      labels:
+        app: sharedata-gateway
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: caddy:2.10.2-alpine
+          command: [caddy]
+          args: [run, --config, /etc/caddy/Caddyfile, --adapter, caddyfile]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+              add: [NET_BIND_SERVICE]
+          readinessProbe:
+            tcpSocket:
+              host: 127.0.0.1
+              port: 12019
+          volumeMounts:
+            - name: config
+              mountPath: /etc/caddy
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: state
+              mountPath: /config
+      volumes:
+        - name: config
+          configMap:
+            name: sharedata-gateway
+        - name: data
+          emptyDir: {}
+        - name: state
+          emptyDir: {}

@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import urllib.request
 import urllib.parse
 import zipfile
@@ -41,11 +42,19 @@ def command(args):
 
 def healthy(sha):
     for url in ('http://127.0.0.1:8844/readyz', 'https://sd.server.gt/readyz'):
-        result = command(['/usr/bin/curl', '--fail', '--silent', '--show-error',
-            '--max-time', '15', '-D', '-', url])
-        headers, _, body = result.replace('\r\n', '\n').partition('\n\n')
-        if 'x-sharedata-revision: ' + sha not in headers.lower() or body.strip() != 'ok':
-            raise RuntimeError('La revisión publicada no coincide con el build.')
+        for attempt in range(10):
+            try:
+                result = command(['/usr/bin/curl', '--fail', '--silent', '--show-error',
+                    '--max-time', '5', '-D', '-', url])
+                headers, _, body = result.replace('\r\n', '\n').partition('\n\n')
+                if 'x-sharedata-revision: ' + sha in headers.lower() and body.strip() == 'ok':
+                    break
+            except subprocess.CalledProcessError:
+                pass
+            if attempt == 9:
+                raise RuntimeError('La revisión publicada no coincide con el build sano.')
+            time.sleep(1)
+
 
 def release(run_id, sha, token):
     settings = json.loads((ROOT / 'deploy-settings.json').read_text())

@@ -28,10 +28,18 @@ solo ShareData. Comprueba rollout, readiness interna y pública, incluida la cab
 `X-ShareData-Revision`. Si falla, restaura el spec anterior y espera su recuperación.
 Los despliegues se serializan; un push nuevo no cancela uno que ya esté desplegando.
 
-El origen Cloudflare `localhost:8844` usa un proxy TCP al ClusterIP del Service,
-no un port-forward ligado a un pod. `sharedata-forward.service` lo mantiene activo.
-`deploy/prepare.py` conserva secretos y configura base, usuario, secreto y origen;
-antes de ejecutarlo instalar `proxy.py` en `/usr/local/lib/sharedata/proxy.py`.
+El origen Cloudflare `localhost:8844` usa el Deployment independiente
+`sharedata-gateway` (Caddy), definido en `deploy/gateway.yaml`. Resuelve el Service
+por red interna y desactiva keepalive hacia el backend: cada petición HTTP puede
+alcanzar un pod sano nuevo, aunque Cloudflare mantenga su conexión al gateway.
+Un proxy TCP al ClusterIP no basta: puede fijar el HTTP keepalive al pod saliente.
+El gateway no se reinicia al actualizar la aplicación. Solo escucha en localhost;
+8848 permite validar configuración antes de activar 8844; admin local en 12019.
+No se registran datos de request en errores para proteger tokens WS en la query.
+
+`deploy/prepare.py` conserva secretos y configura base, usuario, secreto y Service.
+Aplicar `deploy/gateway.yaml` durante el bootstrap; validar y recargar Caddy si su
+configuración cambia. No volver a activar `sharedata-forward.service`, obsoleto.
 Para cambiar el operador, instalar `release.py` como root; el job no lo sobrescribe.
 
 Configuración de confianza: `/opt/sharedata/deploy-settings.json`. Sudo permite

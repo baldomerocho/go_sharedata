@@ -41,25 +41,4 @@ subprocess.run(['k3s', 'kubectl', 'apply', '-f', '-'], input=json.dumps(secret),
 # Entrada estable al Service (no un port-forward ligado a un pod).
 service = {'apiVersion':'v1','kind':'Service','metadata':{'name':'sharedata','namespace':'sharedata'},'spec':{'selector':{'app':'sharedata'},'ports':[{'port':8844,'targetPort':8844}]}}
 subprocess.run(['k3s','kubectl','apply','-f','-'],input=json.dumps(service),text=True,check=True)
-ip = subprocess.check_output(['k3s','kubectl','-n','sharedata','get','service','sharedata','-o','jsonpath={.spec.clusterIP}'],text=True).strip()
-unit = f"""[Unit]
-Description=ShareData stable origin for Cloudflare Tunnel
-After=k3s.service
-Requires=k3s.service
-[Service]
-User=nobody
-Group=nogroup
-ExecStart=/usr/bin/python3 /usr/local/lib/sharedata/proxy.py {ip}
-Restart=always
-RestartSec=1
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-[Install]
-WantedBy=multi-user.target
-"""
-pathlib.Path('/etc/systemd/system/sharedata-forward.service').write_text(unit)
-subprocess.run(['systemctl', 'daemon-reload'], check=True)
-subprocess.run(['systemctl', 'enable', '--now', 'sharedata-forward'], check=True)
 print('Base sharedata_dev, rol sharedata_app y secreto independiente preparados.')

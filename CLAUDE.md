@@ -97,9 +97,16 @@ CI/CD completo: .github/workflows/build.yml y deploy/README.md. El build corre
 hospedado; el operador del VPS valida procedencia y salud y restaura el spec previo
 si falla. El runner no debe hacer checkout en el servidor ni ejecutar scripts del
 repo como root. /opt/sharedata/deploy-settings.json define las referencias fiables.
-La entrada local apunta al ClusterIP estable. No volver a usar port-forward al pod.
+La entrada local usa sharedata-gateway (Caddy) con keepalive off hacia el
+Service interno. No volver a usar port-forward al pod ni proxy TCP puro: el
+keepalive de Cloudflare puede fijar tráfico al pod saliente. La aplicación se
+actualiza sin reiniciar este gateway. Ver deploy/gateway.yaml.
 La reconexión WS recarga metadatos; las escrituras se serializan por conexión.
 El bootstrap del origen antiguo tuvo una interrupción local breve durante su
 sustitución; distinguir esa conversión inicial de las mediciones de rolling update.
 
 La rama de entrega automática es master; las ramas de trabajo y PR no despliegan.
+
+La primera prueba desde master detectó 503 en /readyz por reutilización de la
+conexión al pod saliente. El operador revirtió la imagen. Conservar esa evidencia;
+la medición final de continuidad debe realizarse tras corregir el gateway HTTP.
