@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/hmac"
@@ -21,6 +22,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -35,11 +37,6 @@ import (
 var staticFiles embed.FS
 
 const (
-	dbHost      = "postgres-db"
-	dbPort      = 5432
-	dbUser      = "root"
-	dbPassword  = "root"
-	dbName      = "sharedata"
 	serverPort  = ":8844"
 	otpTTL      = 5 * time.Minute
 	otpCooldown = 60 * time.Second // espera mínima entre dos envíos al mismo teléfono
@@ -65,10 +62,27 @@ func getenv(k, def string) string {
 	return def
 }
 
+// databaseURL permite desplegar instancias aisladas sin interpolar credenciales
+// dentro del formato key=value de lib/pq.
+func databaseURL() string {
+	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
+		return dsn
+	}
+	u := url.URL{
+		Scheme: "postgres",
+		Host:   net.JoinHostPort(getenv("DB_HOST", "postgres-db"), getenv("DB_PORT", "5432")),
+		User:   url.UserPassword(getenv("DB_USER", "root"), getenv("DB_PASSWORD", "root")),
+		Path:   "/" + getenv("DB_NAME", "sharedata"),
+	}
+	q := url.Values{"sslmode": {getenv("DB_SSLMODE", "disable")}}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
 var (
 	db       *sql.DB
 	upgrader = websocket.Upgrader{
-		CheckOrigin: func(r *http.Request) bool { return true },
+		CheckOrigin:     func(r *http.Request) bool { return true },
 		ReadBufferSize:  1024 * 64,
 		WriteBufferSize: 1024 * 64,
 	}
@@ -105,8 +119,7 @@ type WSEvent struct {
 
 func main() {
 	var err error
-	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
-		dbHost, dbPort, dbUser, dbPassword, dbName)
+	connStr := databaseURL()
 
 	db, err = sql.Open("postgres", connStr)
 	if err != nil {
@@ -126,6 +139,19 @@ func main() {
 		log.Fatal("Error ejecutando migraciones:", err)
 	}
 
+	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok\n"))
+	})
+	http.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := db.PingContext(ctx); err != nil {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("ok\n"))
+	})
 	http.HandleFunc("/api/auth/login", handleLogin)
 	http.HandleFunc("/api/auth/verify", handleVerify)
 	http.HandleFunc("/api/auth/me", authMW(handleMe))

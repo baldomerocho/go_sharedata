@@ -1,0 +1,100 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sharedata
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sharedata
+  namespace: sharedata
+spec:
+  replicas: 1
+  # El broadcast WS vive en memoria: mantener un único proceso activo.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: sharedata
+  template:
+    metadata:
+      labels:
+        app: sharedata
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: sharedata
+          image: SHAREDATA_IMAGE
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8844
+          envFrom:
+            - secretRef:
+                name: sharedata-config
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: '1'
+              memory: 384Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8844
+            periodSeconds: 3
+            failureThreshold: 30
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8844
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8844
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sharedata
+  namespace: sharedata
+spec:
+  selector:
+    app: sharedata
+  ports:
+    - port: 8844
+      targetPort: 8844
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sharedata-postgres
+  namespace: dev-databases
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: sharedata
+          podSelector:
+            matchLabels:
+              app: sharedata
+      ports:
+        - protocol: TCP
+          port: 5432

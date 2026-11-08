@@ -78,4 +78,16 @@ Sin framework. Estado global en variables sueltas (`ws`, `chId`, `chs`, `msgCach
 
 ### Configuración
 
-Casi todo está hardcodeado como constantes en la cabecera de `main.go` (credenciales de PostgreSQL, puerto `8844`, TTL y límites del OTP). Del entorno se leen `JWT_SECRET`, `TLS` y el gateway del OTP: `OTP_URL` (por defecto `http://otp-show-app-1:5066/api/otps`), `OTP_API_KEY` (cabecera `x-api-key`, se omite si está vacía) y `OTP_CHANNEL` (por defecto `"1"`). En Docker estas tres vienen de un `env_file` opcional en la raíz: `.env` en producción y `.env.develop` en dev (plantilla en `.env.example`; ninguno se versiona). El gateway sigue el mismo contrato que `GATEWAY_URL`/`X_API_KEY` de `go_otp_verify` (`POST {number, body, channel}`, éxito solo con 200), así que acepta tanto otp-show (sandbox, muestra el código en su PWA sin enviar SMS) como el webhook de SMS de producción. Con `TLS=true` (valor por defecto) el servidor genera un certificado autofirmado ECDSA en memoria al arrancar, con IPs fijas en `generateSelfSignedCert()` — ajústalas si cambia la red local. En Docker se usa `TLS=false` porque hay un proxy delante.
+PostgreSQL acepta `DATABASE_URL` o `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `DB_SSLMODE`; la URL tiene prioridad y las variables se codifican como URL sin interpolación de credenciales en DSN key=value. Los valores predeterminados conservan el compose anterior. El puerto `8844`, TTL y límites del OTP siguen como constantes. Del entorno se leen `JWT_SECRET`, `TLS` y el gateway del OTP: `OTP_URL` (por defecto `http://otp-show-app-1:5066/api/otps`), `OTP_API_KEY` (cabecera `x-api-key`, se omite si está vacía) y `OTP_CHANNEL` (por defecto `"1"`). En Docker estas tres vienen de un `env_file` opcional en la raíz: `.env` en producción y `.env.develop` en dev (plantilla en `.env.example`; ninguno se versiona). El gateway sigue el mismo contrato que `GATEWAY_URL`/`X_API_KEY` de `go_otp_verify` (`POST {number, body, channel}`, éxito solo con 200), así que acepta tanto otp-show (sandbox, muestra el código en su PWA sin enviar SMS) como el webhook de SMS de producción. Con `TLS=true` (valor por defecto) el servidor genera un certificado autofirmado ECDSA en memoria al arrancar, con IPs fijas en `generateSelfSignedCert()` — ajústalas si cambia la red local. En Docker se usa `TLS=false` porque hay un proxy delante.
+
+
+## VPS de desarrollo (2026-11-07)
+
+Guía: `deploy/README.md`. Dominio `sd.server.gt`, namespace propio `sharedata`,
+base `sharedata_dev` y rol `sharedata_app` en `dev-databases`. No comparte base ni
+JWT con otros entornos; la advertencia del compose histórico no aplica a este
+ despliegue. Imágenes compiladas únicamente por GitHub Actions, publicadas por SHA
+ e importadas en k3s. Secretos fuera de Git en `/opt/sharedata/credentials.json`.
+Endpoints operativos `/healthz` y `/readyz`; este último comprueba PostgreSQL.
+Una réplica por broadcast en memoria. No agregar usuarios ni simular SMS sin
+instrucciones; configurar gateway OTP y teléfonos autorizados para iniciar sesión.

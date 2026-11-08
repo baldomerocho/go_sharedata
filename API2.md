@@ -324,3 +324,10 @@ Esta es la llamada pesada del sistema: la respuesta puede rondar los 36 MB para 
 ### Lo que el servidor no da y tendrás que resolver en el cliente
 
 Búsqueda, indexado o previsualización en servidor (imposible: no tiene la clave) · generación del blurhash · ACK de envío · notificaciones push · presencia o "escribiendo…" · lectura/no leído · permisos por canal · rate limiting fuera del login · revocación de tokens · paginación hacia adelante (el cursor solo va hacia atrás; para los mensajes nuevos está el WebSocket).
+
+
+## Comprobaciones operativas
+
+- `GET /healthz`: proceso disponible, `200` y `ok`.
+- `GET /readyz`: PostgreSQL responde en un máximo de 2 segundos; `200` y `ok`,
+  o `503` y `unavailable`. No devuelve configuración ni errores internos.
