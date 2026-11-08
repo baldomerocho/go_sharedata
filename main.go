@@ -191,7 +191,9 @@ func main() {
 	server := &http.Server{Addr: serverPort, ReadHeaderTimeout: 10 * time.Second}
 	stop, cancelSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancelSignals()
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-stop.Done()
 		draining.Store(true)
 		// Permite que k3s retire este endpoint antes de cerrar conexiones.
@@ -219,7 +221,9 @@ func main() {
 		log.Printf("ShareData corriendo en http://0.0.0.0%s (TLS desactivado — detrás de proxy)", serverPort)
 		err = server.ListenAndServe()
 	}
-	if err != nil && err != http.ErrServerClosed {
+	if err == http.ErrServerClosed {
+		<-shutdownDone
+	} else if err != nil {
 		log.Fatal(err)
 	}
 }
