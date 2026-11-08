@@ -101,3 +101,5 @@ La entrada local apunta al ClusterIP estable. No volver a usar port-forward al p
 La reconexión WS recarga metadatos; las escrituras se serializan por conexión.
 El bootstrap del origen antiguo tuvo una interrupción local breve durante su
 sustitución; distinguir esa conversión inicial de las mediciones de rolling update.
+
+La rama de entrega automática es master; las ramas de trabajo y PR no despliegan.

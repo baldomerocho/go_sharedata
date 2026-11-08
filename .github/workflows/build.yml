@@ -1,7 +1,7 @@
 name: Build ShareData
 on:
   push:
-    branches: [master, feat/deploy-vps]
+    branches: [master]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -73,7 +73,7 @@ jobs:
     if: >-
       github.repository == 'baldomerocho/go_sharedata' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-      (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/feat/deploy-vps')
+      github.ref == 'refs/heads/master'
     runs-on: [self-hosted, linux, x64, sharedata-deploy]
     permissions:
       contents: read

@@ -18,7 +18,7 @@ URL: https://sd.server.gt. Namespace k3s: `sharedata`.
 El workflow `Build ShareData` prueba con PostgreSQL real, race y vet, compila en
 un runner hospedado, publica la imagen por SHA y conserva el artefacto 7 días.
 El job `Desplegar en k3s` usa el runner del VPS, sin checkout ni scripts del repo.
-Solo push/workflow_dispatch de master (y feat/deploy-vps durante la puesta en marcha)
+Solo push/workflow_dispatch de master
 pueden desplegar; los PR no usan el runner del servidor.
 
 El operador root-owned `/usr/local/sbin/sharedata-release` recibe la autorización
